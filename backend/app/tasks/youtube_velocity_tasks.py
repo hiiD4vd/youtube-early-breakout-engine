@@ -115,6 +115,12 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
             previous = store.get_pending_breakout(video_id) or {}
             if previous.get("media_state") == "media_unavailable":
                 continue
+            if previous.get("next_retry_at"):
+                try:
+                    if datetime.fromisoformat(previous["next_retry_at"]) > now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
             attempt = int(previous.get("media_attempt", 0)) + 1
             pending = {
                 "video_id": video_id, "seed": seed.model_dump(mode="json"),
@@ -126,7 +132,7 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
             store.save_pending_breakout(pending)
             try:
                 peak_seconds, frame_path = PeakFrameExtractor().extract(video_id, seed.video_url)
-                pending.update({"media_state": "ready_for_enrichment", "peak_timestamp_seconds": peak_seconds, "peak_frame_path": frame_path})
+                pending.update({"media_state": "ready_for_enrichment", "peak_timestamp_seconds": peak_seconds, "peak_frame_path": frame_path, "stages": {"heatmap": "ready", "frame": "ready", "transcript": "pending", "ai": "pending"}})
                 store.save_pending_breakout(pending)
                 with SessionLocal() as db:
                     row = db.scalar(select(YoutubeSnipe).where(YoutubeSnipe.video_id == video_id))
@@ -140,6 +146,18 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
                 media_failures += 1
                 store.record_report(media_errors=1)
                 reason = classify_media_error(exc)
+                if reason == "heatmap_unavailable":
+                    pending.update({"media_state": "heatmap_unavailable", "stages": {"heatmap": "unavailable", "frame": "unavailable", "transcript": "pending", "ai": "pending"}, "last_media_error": reason, "last_media_error_detail": str(exc)[:300], "next_retry_at": None})
+                    store.save_pending_breakout(pending)
+                    with SessionLocal() as db:
+                        row = db.scalar(select(YoutubeSnipe).where(YoutubeSnipe.video_id == video_id))
+                        if row:
+                            row.media_status = "heatmap_unavailable"; row.processing_reason = reason
+                            metadata = dict(row.raw_metadata or {}); metadata["enrichment"] = {"state": "pending", "stages": pending["stages"]}; row.raw_metadata = metadata
+                            db.commit()
+                    from app.tasks.youtube_enrichment_tasks import enrich_youtube_breakout
+                    enrich_youtube_breakout.delay(video_id)
+                    continue
                 pending.update({"media_state": "media_unavailable" if attempt >= settings.youtube_media_max_attempts else "retry_scheduled", "last_media_error": reason, "last_media_error_detail": str(exc)[:300], "next_retry_at": None if attempt >= settings.youtube_media_max_attempts else (now + __import__("datetime").timedelta(hours=2)).isoformat()})
                 store.save_pending_breakout(pending)
                 with SessionLocal() as db:

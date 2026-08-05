@@ -188,5 +188,9 @@ class SeedStore:
                 "last_media_error": payload.get("last_media_error"),
                 "media_attempts": int(payload.get("media_attempt", payload.get("media_attempts", 0))),
                 "next_retry_at": payload.get("next_retry_at"),
+                "enrichment_state": payload.get("enrichment_state", "pending"),
+                "transcript_state": payload.get("transcript_state", "pending"),
+                "stages": payload.get("stages", {}),
+                "last_enrichment_error": payload.get("last_enrichment_error"),
             })
         return sorted(records, key=lambda item: item["media_attempts"], reverse=True)[:limit]

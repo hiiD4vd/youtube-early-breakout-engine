@@ -138,6 +138,11 @@ def list_youtube_breakouts(
                 "age_bucket": (row.raw_metadata or {}).get("age_bucket"),
                 "acceleration": (row.raw_metadata or {}).get("acceleration"),
                 "channel_context": (row.raw_metadata or {}).get("channel_context"),
+                "media_status": row.media_status,
+                "enrichment_status": row.enrichment_status,
+                "processing_reason": row.processing_reason,
+                "enrichment": (row.raw_metadata or {}).get("enrichment"),
+                "ai_mode": (row.ai_analysis or {}).get("mode"),
                 "niche": row.niche,
                 "visual_facts": (row.visual_facts or {}).get("facts", []),
             }

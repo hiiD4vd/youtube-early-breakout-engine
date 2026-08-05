@@ -64,3 +64,22 @@ class PipelineE2ETest(TestCase):
             self.assertEqual(rows[0].current_view_count, 6_000)
             self.assertEqual(rows[0].niche, "Comedy")
             self.assertEqual(rows[0].visual_facts["facts"], ["Red text is visible"])
+
+    def test_heatmap_unavailable_can_be_enriched_from_transcript_only(self) -> None:
+        now = datetime.now(UTC).isoformat()
+        pending = {
+            "video_id": "testvideo02",
+            "seed": {"video_id": "testvideo02", "channel_id": "UCtestchannel", "channel_title": "Test Channel", "title": "Text-only Short", "seed_view_count": 100, "published_at": now, "seeded_at": now, "video_url": "https://example.invalid/shorts/testvideo02", "thumbnail_url": None},
+            "current_view_count": 5_000,
+            "velocity_per_hour": 2_450.0,
+            "media_state": "heatmap_unavailable",
+        }
+        facts = GeminiFacts(niche="Education", visual_facts=[], transcript_summary="A test transcript.", confidence=0.8)
+        with patch("app.tasks.youtube_enrichment_tasks.SeedStore", return_value=_PendingStore(pending)), patch("app.tasks.youtube_enrichment_tasks.fetch_transcript", return_value="Transcript"), patch("app.tasks.youtube_enrichment_tasks.GeminiClient") as gemini, patch("app.tasks.youtube_enrichment_tasks.SessionLocal", self.Session):
+            gemini.return_value.analyze.return_value = facts
+            self.assertEqual(enrich_youtube_breakout.run("testvideo02")["status"], "saved")
+            gemini.return_value.analyze.assert_called_once_with(None, "Transcript")
+        with self.Session() as db:
+            row = db.scalar(select(YoutubeSnipe).where(YoutubeSnipe.video_id == "testvideo02"))
+            self.assertEqual(row.ai_analysis["mode"], "text_only")
+            self.assertEqual(row.visual_facts["facts"], [])
