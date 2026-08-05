@@ -73,6 +73,38 @@ def list_youtube_watchlist() -> dict:
     return {"items": sorted(items, key=lambda item: item["published_at"], reverse=True)}
 
 
+@api_router.get("/youtube/observation-report")
+def youtube_observation_report() -> dict:
+    """A bounded 24-hour evidence report for the thesis and threshold review."""
+    store = SeedStore()
+    report = store.observation_report()
+    raw_seen = report.get("raw_candidates_seen", 0)
+    fresh = report.get("fresh_accepted", 0)
+    age_buckets = {bucket: report.get(f"age_{bucket}", 0) for bucket in ("0-2h", "2-6h", "6-12h", "12-24h")}
+    transitions = {key.removeprefix("transition_"): value for key, value in report.items() if key.startswith("transition_")}
+    states = {state: report.get(f"state_{state}", 0) for state in ("WATCH", "EARLY", "RISING", "BREAKOUT", "COOLED")}
+    profiles = [
+        {"profile": f"{region}/{language}", "coverage_24h": store.coverage(f"{region}_{language}")}
+        for region, language in settings.youtube_profile_list
+    ]
+    sample_counts = {bucket: store.velocity_sample_count(bucket) for bucket in age_buckets}
+    return {
+        "window": "rolling_24h",
+        "raw_candidates_seen": raw_seen,
+        "fresh_accepted": fresh,
+        "fresh_rate_percent": round(100 * fresh / raw_seen, 2) if raw_seen else 0.0,
+        "duplicates": report.get("duplicates", 0),
+        "rejected_old": report.get("rejected_old", 0),
+        "errors": {"discovery": report.get("discovery_errors", 0), "media": report.get("media_errors", 0), "enrichment": report.get("enrichment_errors", 0)},
+        "age_buckets": age_buckets,
+        "tier_states": states,
+        "tier_transitions": transitions,
+        "velocity_samples_by_age": sample_counts,
+        "relative_scoring": {"enabled": settings.youtube_relative_scoring_enabled, "minimum_samples": settings.youtube_relative_min_samples},
+        "profiles": profiles,
+    }
+
+
 @api_router.get("/youtube/breakouts")
 def list_youtube_breakouts(
     niche: str | None = None,

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const groups = [{ label: "Start", links: [{ href: "/youtube", label: "YouTube Breakouts" }] }, { label: "System", links: [{ href: "/youtube/demo", label: "Preview layout" }] }];
+const groups = [{ label: "Start", links: [{ href: "/youtube", label: "YouTube Breakouts" }, { href: "/youtube/report", label: "24-hour report" }] }, { label: "System", links: [{ href: "/youtube/demo", label: "Preview layout" }] }];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
