@@ -19,7 +19,10 @@ class GeminiClient:
     def analyze(self, frame_path: str, transcript: str | None) -> GeminiFacts:
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is not configured")
-        prompt = "Return JSON only: niche, visual_facts (observable facts only), transcript_summary, confidence 0..1. No advice, strategy, or invented facts. Transcript: " + (transcript or "[unavailable]")
+        prompt = """Analyze this YouTube Short using only the supplied image and transcript.
+Return one JSON object with exactly: niche (short neutral category), visual_facts (0-20 observable facts), transcript_summary, confidence (0..1).
+Visual facts must be literally visible or directly stated: people, objects, colors, on-screen text, actions, and setting. Do not infer motives, performance strategy, virality, demographics, or advice. If evidence is unavailable, say so briefly rather than inventing it.
+Transcript follows:\n""" + (transcript or "[No transcript available]")
         image = base64.b64encode(Path(frame_path).read_bytes()).decode()
         response = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent", params={"key": settings.gemini_api_key}, json={"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image}}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}, timeout=45)
         response.raise_for_status()

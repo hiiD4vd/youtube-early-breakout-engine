@@ -22,6 +22,12 @@ class _PendingStore:
     def get_pending_breakout(self, video_id: str) -> dict | None:
         return self.payload if video_id == self.payload["video_id"] else None
 
+    def save_pending_breakout(self, payload: dict) -> None:
+        self.payload = payload
+
+    def record_report(self, **_values: int) -> None:
+        pass
+
 
 class PipelineE2ETest(TestCase):
     @classmethod
@@ -42,6 +48,7 @@ class PipelineE2ETest(TestCase):
             "seed": {"video_id": "testvideo01", "channel_id": "UCtestchannel", "channel_title": "Test Channel", "title": "Test Short", "seed_view_count": 100, "published_at": now, "seeded_at": now, "video_url": "https://example.invalid/shorts/testvideo01", "thumbnail_url": None},
             "current_view_count": 5_000,
             "velocity_per_hour": 2_450.0,
+            "media_state": "ready_for_enrichment",
             "peak_timestamp_seconds": 12.5,
             "peak_frame_path": "/tmp/test-frame.jpg",
         }
