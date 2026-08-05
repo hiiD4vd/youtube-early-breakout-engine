@@ -6,7 +6,7 @@ celery_app = Celery(
     "ycgc_v4",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks"],
+    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks"],
 )
 celery_app.conf.update(
     timezone="UTC",

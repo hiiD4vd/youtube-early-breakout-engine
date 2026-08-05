@@ -17,6 +17,12 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash-lite"
+    youtube_data_api_key: str = ""
+    channel_context_history_limit: int = 12
+    whale_subscriber_threshold: int = 100_000
+    whale_median_view_threshold: int = 100_000
+    established_subscriber_threshold: int = 10_000
+    established_median_view_threshold: int = 20_000
 
     # Phase 1: anonymous YouTube Shorts discovery. These are deliberately not
     # topic inputs: region/language only model an ordinary logged-out session.

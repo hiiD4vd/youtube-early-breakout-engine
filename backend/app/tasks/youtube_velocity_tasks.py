@@ -89,6 +89,8 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
                         row.signal_score = score
                         row.processing_status = "watching" if tier == "WATCH" else "cooled"
                         row.processing_reason = "insufficient_observations" if tier == "WATCH" else "momentum_cooled"
+                        if (row.raw_metadata or {}).get("channel_context"):
+                            audit["channel_context"] = row.raw_metadata["channel_context"]
                         row.raw_metadata = audit
                         db.commit()
                 continue
@@ -97,12 +99,16 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
             # dashboard is useful even when optional media/AI enrichment fails.
             with SessionLocal() as db:
                 row = db.scalar(select(YoutubeSnipe).where(YoutubeSnipe.video_id == video_id))
+                if row and (row.raw_metadata or {}).get("channel_context"):
+                    audit["channel_context"] = row.raw_metadata["channel_context"]
                 values = {"channel_id": seed.channel_id, "channel_title": seed.channel_title, "title": seed.title, "video_url": seed.video_url, "thumbnail_url": seed.thumbnail_url, "published_at": seed.published_at, "initial_view_count": seed.seed_view_count, "current_view_count": current_views, "velocity_per_hour": signal.velocity_per_hour, "breakout_score": signal.velocity_per_hour, "signal_tier": tier, "signal_score": score, "processing_status": "signal_detected", "media_status": "pending", "enrichment_status": "pending", "processing_reason": None, "raw_metadata": audit}
                 if row:
                     for key, value in values.items(): setattr(row, key, value)
                 else:
                     db.add(YoutubeSnipe(video_id=video_id, **values))
                 db.commit()
+            from app.tasks.youtube_channel_tasks import enrich_youtube_channel_context
+            enrich_youtube_channel_context.delay(video_id)
             # Heavy media/AI work stays reserved for confirmed BREAKOUT only.
             if tier != "BREAKOUT" or not store.acquire_breakout_lock(video_id):
                 continue

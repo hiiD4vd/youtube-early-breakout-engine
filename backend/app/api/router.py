@@ -137,6 +137,7 @@ def list_youtube_breakouts(
                 "snapshot_count": int((row.raw_metadata or {}).get("snapshot_count", 0)),
                 "age_bucket": (row.raw_metadata or {}).get("age_bucket"),
                 "acceleration": (row.raw_metadata or {}).get("acceleration"),
+                "channel_context": (row.raw_metadata or {}).get("channel_context"),
                 "niche": row.niche,
                 "visual_facts": (row.visual_facts or {}).get("facts", []),
             }
