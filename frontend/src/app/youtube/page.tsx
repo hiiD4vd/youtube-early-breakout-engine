@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 
-type ChannelContext = { status: "WHALE" | "ESTABLISHED" | "UNDERDOG" | "UNKNOWN"; confidence: number; reason: string; gold_candidate: boolean };
+type ChannelContext = { status: "WHALE" | "PROVEN_WINNER" | "ESTABLISHED" | "UNDERDOG" | "UNKNOWN"; confidence: number; reason: string; gold_candidate: boolean };
 type Breakout = { video_id: string; title: string | null; channel_title: string | null; video_url: string; thumbnail_url: string | null; current_view_count: number; velocity_per_hour: number; signal_tier: string; snapshot_count: number; age_bucket: string | null; acceleration: number | null; channel_context: ChannelContext | null; niche: string | null; visual_facts: string[] };
 type Response = { items: Breakout[] };
 type WatchCandidate = { video_id: string; title: string | null; channel_title: string | null; video_url: string; thumbnail_url: string | null; latest_view_count: number; observations: number; required_observations: number; age_minutes: number; freshness_lane: string; next_observation_at: string; profile: string };

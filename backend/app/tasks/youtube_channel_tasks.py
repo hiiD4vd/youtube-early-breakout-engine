@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 
 from celery import Task
 from sqlalchemy import select
@@ -19,9 +20,17 @@ def enrich_youtube_channel_context(self: Task, video_id: str) -> dict[str, str]:
         if not row:
             return {"status": "missing_signal"}
         existing = (row.raw_metadata or {}).get("channel_context")
-        if existing:
+        if existing and existing.get("status") != "UNKNOWN":
             return {"status": "cached", "context": existing.get("status", "UNKNOWN")}
+        if existing and existing.get("next_retry_at"):
+            try:
+                if datetime.fromisoformat(existing["next_retry_at"]).astimezone(UTC) > datetime.now(UTC):
+                    return {"status": "retry_waiting", "context": "UNKNOWN"}
+            except (TypeError, ValueError):
+                pass
         context = fetch_channel_context(row.channel_id, row.video_url)
+        if existing and context["status"] == "UNKNOWN":
+            context["attempt_count"] = int(existing.get("attempt_count", 0)) + 1
         metadata = dict(row.raw_metadata or {})
         metadata["channel_context"] = context
         row.raw_metadata = metadata
