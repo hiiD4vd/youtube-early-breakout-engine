@@ -47,8 +47,10 @@ def _official_channel_history(channel_id: str) -> tuple[int | None, list[int]]:
 def classify_channel(subscribers: int | None, historical_views: list[int]) -> tuple[str, float, str]:
     median_views = int(statistics.median(historical_views)) if historical_views else None
     evidence = int(subscribers is not None) + int(len(historical_views) >= 5)
-    if (subscribers is not None and subscribers >= settings.whale_subscriber_threshold) or (median_views is not None and median_views >= settings.whale_median_view_threshold):
-        return "WHALE", min(0.95, 0.55 + 0.2 * evidence), "high established audience or consistently high historical views"
+    if subscribers is not None and subscribers >= settings.whale_subscriber_threshold:
+        return "WHALE", min(0.95, 0.55 + 0.2 * evidence), "very large established audience"
+    if median_views is not None and median_views >= settings.whale_median_view_threshold and len(historical_views) >= 5:
+        return "WHALE", min(0.95, 0.55 + 0.2 * evidence), "recent uploads dominate at an extreme, repeatable view level"
     if median_views is not None and median_views >= settings.proven_winner_median_view_threshold and len(historical_views) >= 5:
         return "PROVEN_WINNER", min(0.9, 0.5 + 0.2 * evidence), "recent uploads already perform consistently at a very high level"
     if (subscribers is not None and subscribers >= settings.established_subscriber_threshold) or (median_views is not None and median_views >= settings.established_median_view_threshold):

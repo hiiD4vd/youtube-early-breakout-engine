@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     youtube_data_api_key: str = ""
     channel_context_history_limit: int = 12
     whale_subscriber_threshold: int = 1_000_000
-    whale_median_view_threshold: int = 1_000_000
+    whale_median_view_threshold: int = 5_000_000
     proven_winner_median_view_threshold: int = 500_000
     established_subscriber_threshold: int = 10_000
     established_median_view_threshold: int = 20_000
