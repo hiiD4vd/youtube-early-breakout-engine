@@ -9,7 +9,7 @@ from app.database import SessionLocal
 from app.models.youtube_snipe import YoutubeSnipe
 from app.services.peak_frame import PeakFrameError, PeakFrameExtractor, classify_media_error
 from app.services.seed_store import SeedStore
-from app.services.signal_scoring import SCORING_VERSION, age_bucket, score_tier
+from app.services.signal_scoring import SCORING_VERSION, age_bucket, interval_velocities, score_tier
 from app.services.velocity import calculate_velocity
 from app.services.youtube_client import YoutubeAnonymousClient
 from app.tasks.celery_app import celery_app
@@ -54,17 +54,28 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
             signal = calculate_velocity(seed.seed_view_count, current_views, seed.seeded_at, now, settings.youtube_breakout_min_view_delta, settings.youtube_breakout_min_velocity_per_hour)
             snapshots = store.append_snapshot(video_id, now, current_views)
             bucket = age_bucket(seed.published_at, now)
+            intervals_before = interval_velocities(seed.seed_view_count, seed.seeded_at, snapshots)
+            latest_interval_velocity = intervals_before[-1] if intervals_before else 0.0
+            relative_percentile = store.velocity_percentile(bucket, latest_interval_velocity, settings.youtube_relative_min_samples)
+            store.add_velocity_sample(bucket, now, latest_interval_velocity)
             tier, score, acceleration, intervals = score_tier(
                 seed.seed_view_count, seed.seeded_at, snapshots, bucket,
                 settings.youtube_early_min_velocity_per_hour,
                 settings.youtube_rising_min_velocity_per_hour,
                 settings.youtube_breakout_min_velocity_per_hour,
+                relative_percentile=relative_percentile,
+                relative_enabled=settings.youtube_relative_scoring_enabled,
+                relative_early=settings.youtube_relative_early_percentile,
+                relative_rising=settings.youtube_relative_rising_percentile,
+                relative_breakout=settings.youtube_relative_breakout_percentile,
             )
+            store.record_tier_transition(video_id, tier)
+            store.record_report(velocity_observations=1)
             audit = {
                 "seeded_at": seed.seeded_at.isoformat(), "view_delta": signal.view_delta,
                 "age_bucket": bucket, "snapshot_count": len(snapshots),
                 "interval_velocities": intervals, "acceleration": acceleration,
-                "scoring_version": SCORING_VERSION,
+                "relative_percentile": relative_percentile, "scoring_version": SCORING_VERSION,
             }
             if tier in {"WATCH", "COOLED"}:
                 # Existing rows from an earlier score are demoted rather than
@@ -121,6 +132,7 @@ def check_youtube_seed_velocity(self: Task) -> dict[str, int]:
                 breakouts += 1
             except PeakFrameError as exc:
                 media_failures += 1
+                store.record_report(media_errors=1)
                 reason = classify_media_error(exc)
                 pending.update({"media_state": "media_unavailable" if attempt >= settings.youtube_media_max_attempts else "retry_scheduled", "last_media_error": reason, "last_media_error_detail": str(exc)[:300], "next_retry_at": None if attempt >= settings.youtube_media_max_attempts else (now + __import__("datetime").timedelta(hours=2)).isoformat()})
                 store.save_pending_breakout(pending)

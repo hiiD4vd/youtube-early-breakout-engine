@@ -48,6 +48,11 @@ def score_tier(
     early_min: float,
     rising_min: float,
     breakout_min: float,
+    relative_percentile: float | None = None,
+    relative_enabled: bool = False,
+    relative_early: float = 80.0,
+    relative_rising: float = 92.0,
+    relative_breakout: float = 97.0,
 ) -> tuple[str, float, float, list[float]]:
     """Classify evidence. A single follow-up is deliberately never public."""
     intervals = interval_velocities(seed_views, seeded_at, snapshots)
@@ -61,11 +66,13 @@ def score_tier(
         return "COOLED", 0.0, acceleration, intervals
     if latest < early_min * multiplier or previous <= 0:
         return "WATCH", 0.0, acceleration, intervals
+    if relative_enabled and (relative_percentile is None or relative_percentile < relative_early):
+        return "WATCH", 0.0, acceleration, intervals
     # EARLY requires two positive intervals and no material slowdown.
     if len(intervals) < 3:
         return "EARLY", 0.0, acceleration, intervals
-    if latest >= breakout_min * multiplier and acceleration > 0:
+    if latest >= breakout_min * multiplier and acceleration > 0 and (not relative_enabled or relative_percentile >= relative_breakout):
         return "BREAKOUT", 0.0, acceleration, intervals
-    if latest >= rising_min * multiplier and acceleration > 0:
+    if latest >= rising_min * multiplier and acceleration > 0 and (not relative_enabled or relative_percentile >= relative_rising):
         return "RISING", 0.0, acceleration, intervals
     return "EARLY", 0.0, acceleration, intervals

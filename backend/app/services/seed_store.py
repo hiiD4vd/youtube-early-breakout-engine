@@ -7,12 +7,15 @@ from app.core.redis_keys import (
     SEED_DISCOVERY_LOCK_KEY,
     SEED_INDEX_KEY,
     PIPELINE_STATUS_KEY,
+    OBSERVATION_REPORT_KEY,
     VELOCITY_CHECK_LOCK_KEY,
     breakout_lock_key,
     coverage_key,
     pending_breakout_key,
     seed_key,
+    signal_state_key,
     snapshot_key,
+    velocity_samples_key,
 )
 from app.schemas.youtube import YoutubeSeed
 
@@ -78,7 +81,7 @@ class SeedStore:
 
     def remove(self, video_id: str) -> None:
         """Discard a seed that is no longer inside the configured freshness window."""
-        self.client.delete(seed_key(video_id), snapshot_key(video_id))
+        self.client.delete(seed_key(video_id), snapshot_key(video_id), signal_state_key(video_id))
         self.client.zrem(SEED_INDEX_KEY, video_id)
 
     def append_snapshot(self, video_id: str, observed_at: datetime, view_count: int) -> list[dict]:
@@ -91,6 +94,47 @@ class SeedStore:
 
     def snapshots(self, video_id: str) -> list[dict]:
         return __import__("json").loads(self.client.get(snapshot_key(video_id)) or "[]")
+
+    def record_report(self, **values: int) -> None:
+        with self.client.pipeline(transaction=True) as pipe:
+            for field, value in values.items():
+                if value:
+                    pipe.hincrby(OBSERVATION_REPORT_KEY, field, value)
+            pipe.expire(OBSERVATION_REPORT_KEY, 86_400)
+            pipe.execute()
+
+    def observation_report(self) -> dict[str, int]:
+        return {field: int(value) for field, value in self.client.hgetall(OBSERVATION_REPORT_KEY).items()}
+
+    def record_tier_transition(self, video_id: str, tier: str) -> str | None:
+        key = signal_state_key(video_id)
+        previous = self.client.get(key)
+        self.client.set(key, tier, ex=settings.youtube_seed_ttl_seconds)
+        if previous != tier:
+            self.record_report(**{f"transition_{previous or 'NEW'}_to_{tier}": 1, f"state_{tier}": 1})
+        return previous
+
+    def add_velocity_sample(self, bucket: str, observed_at: datetime, velocity: float) -> None:
+        """Retain a bounded local population for later same-age percentile scoring."""
+        key = velocity_samples_key(bucket)
+        now = observed_at.timestamp()
+        cutoff = now - 86_400
+        samples = __import__("json").loads(self.client.get(key) or "[]")
+        samples = [item for item in samples if float(item.get("observed_at", 0)) >= cutoff]
+        samples.append({"observed_at": now, "velocity": velocity})
+        self.client.set(key, __import__("json").dumps(samples[-1_000:]), ex=86_400)
+
+    def velocity_percentile(self, bucket: str, velocity: float, minimum_samples: int) -> float | None:
+        now = datetime.now(UTC).timestamp()
+        samples = [item for item in __import__("json").loads(self.client.get(velocity_samples_key(bucket)) or "[]") if float(item.get("observed_at", 0)) >= now - 86_400]
+        if len(samples) < minimum_samples:
+            return None
+        values = sorted(float(item["velocity"]) for item in samples)
+        return round(100 * sum(item <= velocity for item in values) / len(values), 2)
+
+    def velocity_sample_count(self, bucket: str) -> int:
+        now = datetime.now(UTC).timestamp()
+        return sum(1 for item in __import__("json").loads(self.client.get(velocity_samples_key(bucket)) or "[]") if float(item.get("observed_at", 0)) >= now - 86_400)
 
     def acquire_velocity_lock(self, timeout_seconds: int) -> bool:
         return bool(self.client.set(VELOCITY_CHECK_LOCK_KEY, "1", nx=True, ex=timeout_seconds))
@@ -142,7 +186,7 @@ class SeedStore:
                 "video_id": payload.get("video_id"),
                 "media_state": payload.get("media_state", "unknown"),
                 "last_media_error": payload.get("last_media_error"),
-                "media_attempts": int(payload.get("media_attempts", 0)),
+                "media_attempts": int(payload.get("media_attempt", payload.get("media_attempts", 0))),
                 "next_retry_at": payload.get("next_retry_at"),
             })
         return sorted(records, key=lambda item: item["media_attempts"], reverse=True)[:limit]

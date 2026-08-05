@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     youtube_velocity_lock_seconds: int = 1_500
     youtube_breakout_min_view_delta: int = 1_000
     youtube_breakout_min_velocity_per_hour: float = 1_000.0
+    youtube_relative_scoring_enabled: bool = False
+    youtube_relative_min_samples: int = 30
+    youtube_relative_early_percentile: float = 80.0
+    youtube_relative_rising_percentile: float = 92.0
+    youtube_relative_breakout_percentile: float = 97.0
     youtube_early_min_velocity_per_hour: float = 250.0
     youtube_rising_min_velocity_per_hour: float = 500.0
     youtube_breakout_lock_seconds: int = 3_600

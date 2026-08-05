@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 
 import httpx
 from celery import Task
@@ -6,6 +7,7 @@ from celery import Task
 from app.config import settings
 from app.services.seed_store import SeedStore
 from app.services.youtube_client import YoutubeAnonymousClient, YoutubeDiscoveryError
+from app.services.signal_scoring import age_bucket
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,7 @@ def discover_youtube_shorts_seeds(self: Task) -> dict[str, int | str | None]:
                         seed.source = f"anonymous_shorts_feed:{region}/{language}:session-{session_number}"
                         if store.save(seed):
                             profile_fresh += 1
+                            store.record_report(**{f"age_{age_bucket(seed.published_at, datetime.now(UTC))}": 1})
                         else:
                             profile_duplicates += 1
                     profile_seen += result.candidates_seen
@@ -64,6 +67,7 @@ def discover_youtube_shorts_seeds(self: Task) -> dict[str, int | str | None]:
             profile_metrics[f"profile_{region}_{language}_duplicates"] = profile_duplicates
             profile_metrics[f"profile_{region}_{language}_sessions"] = sessions
             profile_metrics[f"profile_{region}_{language}_target_shortfall"] = profile_shortfall
+            store.record_report(raw_candidates_seen=profile_seen, fresh_accepted=profile_fresh, rejected_old=profile_old, duplicates=profile_duplicates)
         store.set_status(last_seed_scan_at=__import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(), last_seed_seen=seen, last_seed_written=written, last_seed_old=old, last_seed_duplicates=duplicates, **profile_metrics)
         logger.info(
             "YouTube seed discovery completed: profiles=%s target/profile=%s seen=%s stored=%s old=%s duplicates=%s incomplete=%s",
@@ -71,6 +75,7 @@ def discover_youtube_shorts_seeds(self: Task) -> dict[str, int | str | None]:
         )
         return {"profiles": len(settings.youtube_profile_list), "candidates_seen": seen, "seeds_written": written, "seeds_rejected_age": old, "duplicates": duplicates}
     except (YoutubeDiscoveryError, httpx.HTTPError) as exc:
+        store.record_report(discovery_errors=1)
         store.set_status(last_seed_error=str(exc)[:300])
         logger.warning("Anonymous YouTube seed discovery failed: %s", exc)
         raise YoutubeDiscoveryError(str(exc)) from exc
