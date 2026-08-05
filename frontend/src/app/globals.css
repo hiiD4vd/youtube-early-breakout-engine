@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; --bg-primary: 9 11 15; --bg-secondary: 14 17 23; --surface: 18 22 30; --line: rgba(255,255,255,.07); --line-strong: rgba(255,255,255,.14); --text-primary: 233 236 240; --text-secondary: 154 163 178; --text-tertiary: 91 100 114; --neon: 184 242 61; --neon-dim: rgba(184,242,61,.12); --warning: 232 179 65; --shadow-card: 0 1px 2px rgba(0,0,0,.45); --shadow-card-hover: 0 8px 24px -12px rgba(0,0,0,.6); }
+html, body { margin: 0; min-height: 100vh; background: rgb(var(--bg-primary)); color: rgb(var(--text-primary)); font-family: Arial, Helvetica, sans-serif; font-feature-settings: "tnum"; }
+* { box-sizing: border-box; }
+::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.09); border-radius: 999px; }

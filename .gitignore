@@ -1,0 +1,20 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+celerybeat-schedule*
+
+# Next.js
+frontend/node_modules/
+frontend/.next/
+*.tsbuildinfo
+
+# Docker
+pgdata/
+backend/data/
