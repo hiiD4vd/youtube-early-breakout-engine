@@ -68,11 +68,20 @@ No public external system can be bias-free. The defensible controls are:
 - Keep existing `YoutubeSnipe` and Trend Cluster tables unchanged.
 - Success: one cannot accidentally mix Market Trends and Early Breakouts.
 
+**Implemented (2026-08-06):** `market_videos` and append-only
+`market_video_observations` preserve independent source, region, category, and
+observation provenance. They have no foreign key or write path into
+`YoutubeSnipe`.
+
 ### M1 — broad public collection
 
 - Add scheduled source lanes with quota/rate-limit budget and coverage report.
 - Store observations and deduplicate globally.
 - Success: dashboard reports exact source/region coverage, not a vague count.
+
+**Starter implemented (2026-08-06):** the scheduled `official_chart` collector
+uses the official `videos.list(chart=mostPopular)` API over configured regions
+and categories, and remains safely idle until `YOUTUBE_DATA_API_KEY` is set.
 
 ### M2 — semantic topic grouping
 

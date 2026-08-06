@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     youtube_enrichment_retry_interval_minutes: int = 10
     youtube_enrichment_retry_lock_seconds: int = 540
 
+    # Broad Market Trends is isolated from Early Breakouts. It intentionally
+    # includes large/news channels but exposes source provenance and coverage.
+    market_trends_enabled: bool = True
+    market_trends_interval_minutes: int = 10
+    market_trends_regions: str = "ID,US,GB"
+    market_trends_chart_categories: str = "0,10,24,17"
+    market_trends_max_results: int = 50
+
     @property
     def sqlalchemy_url(self) -> str:
         if self.database_url.startswith("postgresql://"):

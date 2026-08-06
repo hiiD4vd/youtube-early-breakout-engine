@@ -12,6 +12,7 @@ from app.database import get_db
 from app.config import settings
 from app.models.youtube_snipe import YoutubeSnipe
 from app.models.trend_cluster import TopicClusterFeedback, TrendCluster, TrendMembership, TrendSnapshot
+from app.models.market_trends import MarketVideo, MarketVideoObservation
 from app.services.seed_store import SeedStore
 
 api_router = APIRouter(prefix="/api/v1")
@@ -129,6 +130,24 @@ def youtube_pipeline_status(db: Session = Depends(get_db)) -> dict:
         }
         profiles.append({"region": region, "language": language, "latest": latest, "coverage_24h": store.coverage(f"{region}_{language}")})
     return {"seed_active": len(store.list_ids()), "pending_breakouts": store.pending_count(), "pending_states": pending_states, "pending_items": store.pending_breakouts(), "signal_count": signal_count, "last_seed_scan_at": status.get("last_seed_scan_at"), "last_velocity_scan_at": status.get("last_velocity_scan_at"), "last_seed_seen": int(status.get("last_seed_seen", 0)), "last_seed_written": int(status.get("last_seed_written", 0)), "last_seed_old": int(status.get("last_seed_old", 0)), "last_seed_duplicates": int(status.get("last_seed_duplicates", 0)), "last_velocity_eligible": int(status.get("last_velocity_eligible", 0)), "last_media_failures": int(status.get("last_media_failures", 0)), "profiles": profiles}
+
+
+@api_router.get("/youtube/market/status")
+def market_trends_status(db: Session = Depends(get_db)) -> dict:
+    """Coverage status for the isolated broad Market Trends collection lane."""
+    store = SeedStore()
+    status = store.status()
+    return {
+        "enabled": settings.market_trends_enabled,
+        "configured": bool(settings.youtube_data_api_key),
+        "state": status.get("market_trends_state", "waiting"),
+        "last_scan_at": status.get("market_trends_last_scan_at"),
+        "videos": db.scalar(select(__import__("sqlalchemy").func.count(MarketVideo.id))) or 0,
+        "observations": db.scalar(select(__import__("sqlalchemy").func.count(MarketVideoObservation.id))) or 0,
+        "regions": [item.strip().upper() for item in settings.market_trends_regions.split(",") if item.strip()],
+        "categories": [item.strip() for item in settings.market_trends_chart_categories.split(",") if item.strip()],
+        "methodology": "Official public-chart lane only. It is isolated from anonymous Early Breakout discovery and does not represent all YouTube uploads.",
+    }
 
 
 @api_router.get("/youtube/watchlist")
