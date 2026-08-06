@@ -17,7 +17,11 @@ def youtube_pipeline_status(db: Session = Depends(get_db)) -> dict:
     store = SeedStore()
     status = store.status()
     pending_states = store.pending_state_counts()
-    signal_count = db.scalar(select(__import__("sqlalchemy").func.count(YoutubeSnipe.id))) or 0
+    signal_count = db.scalar(
+        select(__import__("sqlalchemy").func.count(YoutubeSnipe.id)).where(
+            YoutubeSnipe.signal_tier.in_(("EARLY", "RISING", "BREAKOUT"))
+        )
+    ) or 0
     profiles = []
     for region, language in settings.youtube_profile_list:
         latest = {
@@ -111,14 +115,14 @@ def list_youtube_breakouts(
     limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> dict:
-    freshness_cutoff = datetime.now(UTC) - timedelta(hours=settings.youtube_seed_max_age_hours)
-    statement = select(YoutubeSnipe).where(YoutubeSnipe.published_at >= freshness_cutoff).order_by(desc(YoutubeSnipe.detected_at)).limit(limit)
+    # The 24-hour rule belongs to discovery only. A signal that was detected
+    # while fresh is retained as research evidence even after it ages out.
+    statement = select(YoutubeSnipe).order_by(desc(YoutubeSnipe.detected_at)).limit(limit)
     if niche:
         statement = statement.where(YoutubeSnipe.niche == niche)
     rows = [
         row for row in db.scalars(statement).all()
         if row.signal_tier in {"EARLY", "RISING", "BREAKOUT"}
-        and int((row.raw_metadata or {}).get("snapshot_count", 0)) >= 2
     ]
     return {
         "items": [
