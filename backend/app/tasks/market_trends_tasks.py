@@ -87,7 +87,10 @@ def collect_market_chart(self: Task) -> dict[str, int | str]:
                         video.published_at = _parse_time(snippet.get("publishedAt"))
                         video.category_id = snippet.get("categoryId")
                         video.duration_iso8601 = content.get("duration")
-                        video.shorts_status = "SHORT_DURATION_CANDIDATE"
+                        # Do not erase an already audited decision when the
+                        # chart refreshes the same video.
+                        if video.shorts_status not in {"VERIFIED_SHORTS", "REJECTED_NOT_SHORTS"}:
+                            video.shorts_status = "SHORT_DURATION_CANDIDATE"
                         video.last_seen_at = now
                         video.source_provenance = {"first_lane": "official_chart", "official": True}
                         db.add(MarketVideoObservation(market_video_id=video.id, observed_at=now, source_lane="official_chart", region=region, category_id=category, view_count=_int(statistics.get("viewCount")) or 0, like_count=_int(statistics.get("likeCount")), comment_count=_int(statistics.get("commentCount")), source_rank=rank, raw_payload={"etag": item.get("etag")}))
