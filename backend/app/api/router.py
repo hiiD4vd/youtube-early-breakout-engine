@@ -1,6 +1,9 @@
+import csv
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -34,6 +37,7 @@ def _trend_member_payload(row: YoutubeSnipe, membership: TrendMembership) -> dic
         "niche": row.niche,
         "channel_context": metadata.get("channel_context"),
         "similarity_score": membership.similarity_score,
+        "joined_at": membership.joined_at.isoformat(),
         "membership_state": membership.membership_state,
         "is_reupload_suspect": membership.is_reupload_suspect,
         "is_same_channel_duplicate": membership.is_same_channel_duplicate,
@@ -219,6 +223,57 @@ def list_youtube_trends(
         "private_candidate_count": private_candidate_count,
         "methodology": "Only clusters with independent cross-channel evidence are shown. Views and velocity are observed within this system, not YouTube-wide totals.",
     }
+
+
+@api_router.get("/youtube/trends/export.csv")
+def export_youtube_trends_csv(db: Session = Depends(get_db)) -> Response:
+    """Export the current public ranking and its auditable evidence rows."""
+    clusters = db.scalars(
+        select(TrendCluster)
+        .where(TrendCluster.status.in_(PUBLIC_TREND_STATUSES))
+        .order_by(desc(TrendCluster.trend_score), desc(TrendCluster.last_observed_at))
+    ).all()
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=[
+        "record_type", "cluster_id", "topic_label", "status", "trend_score",
+        "observed_views", "observed_velocity_per_hour", "member_count",
+        "channel_count", "observed_at", "video_id", "channel_id",
+        "channel_title", "video_title", "video_views", "video_velocity_per_hour",
+        "similarity_score", "joined_at", "membership_state",
+    ])
+    writer.writeheader()
+    for cluster in clusters:
+        writer.writerow({
+            "record_type": "cluster", "cluster_id": str(cluster.id),
+            "topic_label": cluster.label, "status": cluster.status,
+            "trend_score": cluster.trend_score, "observed_views": cluster.observed_views,
+            "observed_velocity_per_hour": cluster.observed_velocity_per_hour,
+            "member_count": cluster.member_count, "channel_count": cluster.channel_count,
+            "observed_at": cluster.last_observed_at.isoformat() if cluster.last_observed_at else "",
+        })
+        members = db.execute(
+            select(YoutubeSnipe, TrendMembership)
+            .join(TrendMembership, TrendMembership.youtube_snipe_id == YoutubeSnipe.id)
+            .where(TrendMembership.cluster_id == cluster.id)
+            .order_by(TrendMembership.joined_at)
+        ).all()
+        for row, membership in members:
+            writer.writerow({
+                "record_type": "evidence_post", "cluster_id": str(cluster.id),
+                "topic_label": cluster.label, "status": cluster.status,
+                "video_id": row.video_id, "channel_id": row.channel_id,
+                "channel_title": row.channel_title, "video_title": row.title,
+                "video_views": row.current_view_count,
+                "video_velocity_per_hour": row.velocity_per_hour,
+                "similarity_score": membership.similarity_score,
+                "joined_at": membership.joined_at.isoformat(),
+                "membership_state": membership.membership_state,
+            })
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=ycgc-observed-topic-trends.csv"},
+    )
 
 
 @api_router.get("/youtube/trends/{cluster_id}")

@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 
-type Member = { video_id: string; title: string | null; channel_title: string | null; video_url: string; thumbnail_url: string | null; current_view_count: number; velocity_per_hour: number; signal_tier: string; similarity_score: number | null; is_reupload_suspect: boolean; is_same_channel_duplicate: boolean };
+type Member = { video_id: string; title: string | null; channel_title: string | null; video_url: string; thumbnail_url: string | null; current_view_count: number; velocity_per_hour: number; signal_tier: string; similarity_score: number | null; joined_at: string; is_reupload_suspect: boolean; is_same_channel_duplicate: boolean };
 type Snapshot = { observed_at: string; observed_views: number; observed_velocity_per_hour: number; trend_score: number; member_count: number; channel_count: number };
 type Trend = { label: string; niche: string | null; status: string; trend_score: number; observed_views: number; observed_velocity_per_hour: number; acceleration: number | null; member_count: number; channel_count: number; first_detected_at: string; last_observed_at: string | null; cluster_reason: string | null; members: Member[]; snapshots: Snapshot[] };
 const format = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });

@@ -243,6 +243,9 @@ number of private candidates explicit instead of publishing them as trends.
 `/youtube/trends/{clusterId}` shows the stored observed-velocity line,
 aggregate metrics, and the member Shorts that support the cluster. The
 previous individual-signal dashboard remains available as **Signal posts**.
+The Topics page can export the public ranking plus its member evidence as
+`/api/v1/youtube/trends/export.csv`; a report never silently includes a private
+one-video candidate.
 
 ### Phase T4 — Cluster detail and research report
 
