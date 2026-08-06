@@ -81,3 +81,21 @@ class TrendSnapshot(Base):
     trend_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     scoring_version: Mapped[str] = mapped_column(String(64), nullable=False, default="topic-v1")
     reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class TrendSignalFeature(Base):
+    """Versioned, post-signal feature representation used for clustering."""
+
+    __tablename__ = "trend_signal_features"
+    __table_args__ = (Index("ix_trend_signal_features_model", "feature_model"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    youtube_snipe_id: Mapped[int] = mapped_column(ForeignKey("youtube_snipes.id", ondelete="CASCADE"), unique=True, nullable=False)
+    feature_model: Mapped[str] = mapped_column(String(64), nullable=False, default="lexical-v1")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    sparse_vector: Mapped[dict[str, float] | None] = mapped_column(JSONB)
+    source_provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -64,7 +64,9 @@ class Settings(BaseSettings):
 
     # Topic Trends is a post-signal layer. It never changes anonymous discovery.
     topic_trends_interval_minutes: int = 15
+    topic_feature_interval_minutes: int = 5
     topic_trends_snapshot_interval_minutes: int = 15
+    topic_lexical_similarity_threshold: float = 0.42
     topic_trends_live_window_hours: int = 24
     topic_trends_min_emerging_videos: int = 2
     topic_trends_min_emerging_channels: int = 2
