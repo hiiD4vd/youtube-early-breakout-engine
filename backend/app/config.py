@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     topic_trends_min_emerging_videos: int = 2
     topic_trends_min_emerging_channels: int = 2
     topic_embedding_storage: str = "jsonb"  # migrate to pgvector only after a safe DB image upgrade
+    topic_accelerating_min_videos: int = 3
+    topic_accelerating_min_channels: int = 2
+    topic_confirmed_min_videos: int = 4
+    topic_confirmed_min_channels: int = 3
+    topic_cooling_after_hours: int = 6
+    topic_velocity_reference_per_hour: float = 30_000.0
 
     # Retry enrichment from Redis independently of the 24-hour seed lifetime.
     youtube_enrichment_retry_interval_minutes: int = 10

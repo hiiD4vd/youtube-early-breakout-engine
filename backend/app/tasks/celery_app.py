@@ -36,5 +36,9 @@ celery_app.conf.update(
             "task": "app.tasks.youtube_trend_tasks.cluster_recent_signals",
             "schedule": settings.topic_trends_interval_minutes * 60,
         }
+        ,"score-youtube-topic-trends": {
+            "task": "app.tasks.youtube_trend_tasks.score_topic_trends",
+            "schedule": settings.topic_trends_snapshot_interval_minutes * 60,
+        }
     },
 )
