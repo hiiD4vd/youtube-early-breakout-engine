@@ -150,6 +150,28 @@ def market_trends_status(db: Session = Depends(get_db)) -> dict:
     }
 
 
+@api_router.get("/youtube/market/videos")
+def list_market_videos(
+    limit: int = Query(default=60, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Transparent raw market intake while semantic topic clustering is built."""
+    videos = db.scalars(select(MarketVideo).order_by(desc(MarketVideo.last_seen_at)).limit(limit)).all()
+    latest_by_video = {}
+    for observation in db.scalars(
+        select(MarketVideoObservation).order_by(desc(MarketVideoObservation.observed_at)).limit(limit * 4)
+    ).all():
+        latest_by_video.setdefault(observation.market_video_id, observation)
+    return {"items": [{
+        "video_id": video.video_id, "title": video.title, "channel_title": video.channel_title,
+        "video_url": video.video_url, "thumbnail_url": video.thumbnail_url,
+        "published_at": video.published_at.isoformat() if video.published_at else None,
+        "last_seen_at": video.last_seen_at.isoformat(), "category_id": video.category_id,
+        "view_count": (latest_by_video.get(video.id).view_count if latest_by_video.get(video.id) else 0),
+        "source_rank": (latest_by_video.get(video.id).source_rank if latest_by_video.get(video.id) else None),
+    } for video in videos], "methodology": "Raw official-chart evidence. These videos are broad market input, not yet semantic topic clusters."}
+
+
 @api_router.get("/youtube/watchlist")
 def list_youtube_watchlist() -> dict:
     """Read-only seed view: transparent activity, explicitly not a signal."""
