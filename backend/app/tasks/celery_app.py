@@ -6,7 +6,7 @@ celery_app = Celery(
     "ycgc_v4",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks"],
+    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_shorts_tasks"],
 )
 celery_app.conf.update(
     timezone="UTC",
@@ -43,6 +43,10 @@ celery_app.conf.update(
         ,"collect-youtube-market-chart": {
             "task": "app.tasks.market_trends_tasks.collect_market_chart",
             "schedule": settings.market_trends_interval_minutes * 60,
+        }
+        ,"verify-youtube-market-shorts": {
+            "task": "app.tasks.market_shorts_tasks.verify_market_shorts",
+            "schedule": settings.market_shorts_verify_interval_minutes * 60,
         }
     },
 )

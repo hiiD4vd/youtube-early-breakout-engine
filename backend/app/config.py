@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     market_trends_regions: str = "ID,US,GB"
     market_trends_chart_categories: str = "0,10,24,17"
     market_trends_max_results: int = 50
+    market_shorts_verify_interval_minutes: int = 5
+    market_shorts_verify_batch_size: int = 12
 
     @property
     def sqlalchemy_url(self) -> str:

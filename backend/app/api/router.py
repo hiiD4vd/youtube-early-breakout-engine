@@ -156,7 +156,7 @@ def list_market_videos(
     db: Session = Depends(get_db),
 ) -> dict:
     """Transparent raw market intake while semantic topic clustering is built."""
-    videos = db.scalars(select(MarketVideo).order_by(desc(MarketVideo.last_seen_at)).limit(limit)).all()
+    videos = db.scalars(select(MarketVideo).where(MarketVideo.shorts_status == "VERIFIED_SHORTS").order_by(desc(MarketVideo.last_seen_at)).limit(limit)).all()
     latest_by_video = {}
     for observation in db.scalars(
         select(MarketVideoObservation).order_by(desc(MarketVideoObservation.observed_at)).limit(limit * 4)
@@ -170,7 +170,7 @@ def list_market_videos(
         "shorts_status": video.shorts_status,
         "view_count": (latest_by_video.get(video.id).view_count if latest_by_video.get(video.id) else 0),
         "source_rank": (latest_by_video.get(video.id).source_rank if latest_by_video.get(video.id) else None),
-    } for video in videos if video.shorts_status == "SHORT_DURATION_CANDIDATE"], "methodology": "Shorts-first official-chart candidates: duration <=3 minutes. Aspect-ratio verification is required before publication as a confirmed Shorts topic."}
+    } for video in videos], "methodology": "Verified Shorts only: duration <=3 minutes plus vertical or square video metadata. These are broad market evidence, not yet semantic topic clusters."}
 
 
 @api_router.get("/youtube/watchlist")
