@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 
 import httpx
 from celery import Task
@@ -26,6 +27,15 @@ def _parse_time(value: str | None) -> datetime | None:
 
 def _int(value) -> int | None:
     return int(value) if value not in (None, "") else None
+
+
+def _duration_seconds(value: str | None) -> int:
+    """Parse the ISO 8601 duration returned by the official videos endpoint."""
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value or "")
+    if not match:
+        return 0
+    hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
 
 
 @celery_app.task(bind=True, name="app.tasks.market_trends_tasks.collect_market_chart")
@@ -56,6 +66,12 @@ def collect_market_chart(self: Task) -> dict[str, int | str]:
                     response.raise_for_status()
                     for rank, item in enumerate(response.json().get("items", []), start=1):
                         snippet, statistics, content = item.get("snippet", {}), item.get("statistics", {}), item.get("contentDetails", {})
+                        # The public API exposes duration but not a reliable
+                        # Shorts flag/aspect ratio. Keep only <=3-minute
+                        # candidates and label them honestly for later visual
+                        # verification before any topic can be published.
+                        if _duration_seconds(content.get("duration")) > 180:
+                            continue
                         video_id = item["id"]
                         video = existing.get(video_id)
                         if not video:
@@ -71,6 +87,7 @@ def collect_market_chart(self: Task) -> dict[str, int | str]:
                         video.published_at = _parse_time(snippet.get("publishedAt"))
                         video.category_id = snippet.get("categoryId")
                         video.duration_iso8601 = content.get("duration")
+                        video.shorts_status = "SHORT_DURATION_CANDIDATE"
                         video.last_seen_at = now
                         video.source_provenance = {"first_lane": "official_chart", "official": True}
                         db.add(MarketVideoObservation(market_video_id=video.id, observed_at=now, source_lane="official_chart", region=region, category_id=category, view_count=_int(statistics.get("viewCount")) or 0, like_count=_int(statistics.get("likeCount")), comment_count=_int(statistics.get("commentCount")), source_rank=rank, raw_payload={"etag": item.get("etag")}))

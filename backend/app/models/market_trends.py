@@ -29,6 +29,7 @@ class MarketVideo(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     category_id: Mapped[str | None] = mapped_column(String(16))
     duration_iso8601: Mapped[str | None] = mapped_column(String(64))
+    shorts_status: Mapped[str] = mapped_column(String(32), nullable=False, default="UNVERIFIED")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     source_provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

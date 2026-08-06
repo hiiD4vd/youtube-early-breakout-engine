@@ -167,9 +167,10 @@ def list_market_videos(
         "video_url": video.video_url, "thumbnail_url": video.thumbnail_url,
         "published_at": video.published_at.isoformat() if video.published_at else None,
         "last_seen_at": video.last_seen_at.isoformat(), "category_id": video.category_id,
+        "shorts_status": video.shorts_status,
         "view_count": (latest_by_video.get(video.id).view_count if latest_by_video.get(video.id) else 0),
         "source_rank": (latest_by_video.get(video.id).source_rank if latest_by_video.get(video.id) else None),
-    } for video in videos], "methodology": "Raw official-chart evidence. These videos are broad market input, not yet semantic topic clusters."}
+    } for video in videos if video.shorts_status == "SHORT_DURATION_CANDIDATE"], "methodology": "Shorts-first official-chart candidates: duration <=3 minutes. Aspect-ratio verification is required before publication as a confirmed Shorts topic."}
 
 
 @api_router.get("/youtube/watchlist")
