@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from celery import Task
 from sqlalchemy import select
@@ -94,6 +94,7 @@ def enrich_youtube_breakout(self: Task, video_id: str) -> dict[str, str]:
         store.record_report(enrichment_errors=1)
         pending["enrichment_state"] = "retry_scheduled"
         pending["last_enrichment_error"] = str(exc)[:300]
+        pending["next_enrichment_retry_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
         pending["stages"] = stages
         store.save_pending_breakout(pending)
         _save_row_status(video_id, media_status=media_state, enrichment_status="retry_scheduled", reason="enrichment_failed", metadata={"state": "retry_scheduled", "stages": stages, "error": str(exc)[:300]})

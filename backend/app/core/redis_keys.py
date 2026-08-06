@@ -14,6 +14,7 @@ def snapshot_key(video_id: str) -> str:
 SEED_INDEX_KEY = f"{YOUTUBE_NAMESPACE}:seed_ids"
 SEED_DISCOVERY_LOCK_KEY = f"{YOUTUBE_NAMESPACE}:lock:seed-discovery"
 VELOCITY_CHECK_LOCK_KEY = f"{YOUTUBE_NAMESPACE}:lock:velocity-check"
+ENRICHMENT_RETRY_LOCK_KEY = f"{YOUTUBE_NAMESPACE}:lock:enrichment-retry"
 PIPELINE_STATUS_KEY = f"{YOUTUBE_NAMESPACE}:pipeline-status"
 OBSERVATION_REPORT_KEY = f"{YOUTUBE_NAMESPACE}:observation-report-24h"
 

@@ -153,6 +153,15 @@ class SeedStore:
         raw = self.client.get(pending_breakout_key(video_id))
         return __import__("json").loads(raw) if raw else None
 
+    def iter_pending_breakouts(self) -> list[dict]:
+        """Return bounded-TTL pending records for retry tasks, independent of seeds."""
+        records: list[dict] = []
+        for key in self.client.scan_iter(match="ycgc:youtube:pending-breakout:*"):
+            raw = self.client.get(key)
+            if raw:
+                records.append(__import__("json").loads(raw))
+        return records
+
     def set_status(self, **values: str | int | float) -> None:
         from datetime import UTC, datetime
         values["updated_at"] = datetime.now(UTC).isoformat()

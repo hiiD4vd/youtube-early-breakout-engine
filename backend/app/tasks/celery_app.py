@@ -6,7 +6,7 @@ celery_app = Celery(
     "ycgc_v4",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks"],
+    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks"],
 )
 celery_app.conf.update(
     timezone="UTC",
@@ -23,6 +23,10 @@ celery_app.conf.update(
         ,"check-youtube-seed-velocity": {
             "task": "app.tasks.youtube_velocity_tasks.check_youtube_seed_velocity",
             "schedule": settings.youtube_velocity_interval_minutes * 60,
+        }
+        ,"retry-pending-youtube-enrichment": {
+            "task": "app.tasks.youtube_retry_tasks.retry_pending_enrichment",
+            "schedule": settings.youtube_enrichment_retry_interval_minutes * 60,
         }
     },
 )

@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     youtube_media_max_attempts: int = 6
     media_root: str = "data/media"
 
+    # Topic Trends is a post-signal layer. It never changes anonymous discovery.
+    topic_trends_interval_minutes: int = 15
+    topic_trends_snapshot_interval_minutes: int = 15
+    topic_trends_live_window_hours: int = 24
+    topic_trends_min_emerging_videos: int = 2
+    topic_trends_min_emerging_channels: int = 2
+    topic_embedding_storage: str = "jsonb"  # migrate to pgvector only after a safe DB image upgrade
+
+    # Retry enrichment from Redis independently of the 24-hour seed lifetime.
+    youtube_enrichment_retry_interval_minutes: int = 10
+    youtube_enrichment_retry_lock_seconds: int = 540
+
     @property
     def sqlalchemy_url(self) -> str:
         if self.database_url.startswith("postgresql://"):
