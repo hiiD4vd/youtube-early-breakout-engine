@@ -1,15 +1,99 @@
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.config import settings
 from app.models.youtube_snipe import YoutubeSnipe
+from app.models.trend_cluster import TrendCluster, TrendMembership, TrendSnapshot
 from app.services.seed_store import SeedStore
 
 api_router = APIRouter(prefix="/api/v1")
+
+
+PUBLIC_TREND_STATUSES = ("EMERGING", "ACCELERATING", "CONFIRMED")
+
+
+def _trend_member_payload(row: YoutubeSnipe, membership: TrendMembership) -> dict:
+    """Evidence posts are exposed separately from the topic-level aggregate."""
+    metadata = row.raw_metadata or {}
+    return {
+        "video_id": row.video_id,
+        "title": row.title,
+        "channel_title": row.channel_title,
+        "channel_id": row.channel_id,
+        "video_url": row.video_url,
+        "thumbnail_url": row.thumbnail_url,
+        "published_at": row.published_at.isoformat(),
+        "detected_at": row.detected_at.isoformat(),
+        "current_view_count": row.current_view_count,
+        "velocity_per_hour": row.velocity_per_hour,
+        "signal_tier": row.signal_tier,
+        "niche": row.niche,
+        "channel_context": metadata.get("channel_context"),
+        "similarity_score": membership.similarity_score,
+        "membership_state": membership.membership_state,
+        "is_reupload_suspect": membership.is_reupload_suspect,
+        "is_same_channel_duplicate": membership.is_same_channel_duplicate,
+    }
+
+
+def _trend_snapshot_payload(snapshot: TrendSnapshot) -> dict:
+    return {
+        "observed_at": snapshot.observed_at.isoformat(),
+        "observed_views": snapshot.observed_views,
+        "observed_velocity_per_hour": snapshot.observed_velocity_per_hour,
+        "median_velocity_per_hour": snapshot.median_velocity_per_hour,
+        "acceleration": snapshot.acceleration,
+        "member_count": snapshot.member_count,
+        "channel_count": snapshot.channel_count,
+        "new_member_count": snapshot.new_member_count,
+        "new_channel_count": snapshot.new_channel_count,
+        "trend_score": snapshot.trend_score,
+        "reason": snapshot.reason,
+    }
+
+
+def _trend_payload(db: Session, cluster: TrendCluster, *, member_limit: int = 5, snapshot_limit: int = 12) -> dict:
+    members = db.execute(
+        select(YoutubeSnipe, TrendMembership)
+        .join(TrendMembership, TrendMembership.youtube_snipe_id == YoutubeSnipe.id)
+        .where(TrendMembership.cluster_id == cluster.id)
+        .order_by(desc(YoutubeSnipe.velocity_per_hour))
+        .limit(member_limit)
+    ).all()
+    snapshots = db.scalars(
+        select(TrendSnapshot)
+        .where(TrendSnapshot.cluster_id == cluster.id)
+        .order_by(desc(TrendSnapshot.observed_at))
+        .limit(snapshot_limit)
+    ).all()
+    snapshots.reverse()
+    return {
+        "id": str(cluster.id),
+        "public_slug": cluster.public_slug,
+        "label": cluster.label or "Unlabeled observed pattern",
+        "label_confidence": cluster.label_confidence,
+        "niche": cluster.niche,
+        "status": cluster.status,
+        "trend_score": cluster.trend_score,
+        "semantic_cohesion": cluster.semantic_cohesion,
+        "observed_views": cluster.observed_views,
+        "observed_velocity_per_hour": cluster.observed_velocity_per_hour,
+        "acceleration": cluster.acceleration,
+        "member_count": cluster.member_count,
+        "channel_count": cluster.channel_count,
+        "first_detected_at": cluster.first_detected_at.isoformat(),
+        "last_observed_at": cluster.last_observed_at.isoformat() if cluster.last_observed_at else None,
+        "region_mix": cluster.region_mix or {},
+        "channel_context_mix": cluster.channel_context_mix or {},
+        "evidence_summary": cluster.evidence_summary or {},
+        "cluster_reason": cluster.cluster_reason,
+        "members": [_trend_member_payload(row, membership) for row, membership in members],
+        "snapshots": [_trend_snapshot_payload(snapshot) for snapshot in snapshots],
+    }
 
 
 @api_router.get("/youtube/status")
@@ -107,6 +191,44 @@ def youtube_observation_report() -> dict:
         "relative_scoring": {"enabled": settings.youtube_relative_scoring_enabled, "minimum_samples": settings.youtube_relative_min_samples},
         "profiles": profiles,
     }
+
+
+@api_router.get("/youtube/trends")
+def list_youtube_trends(
+    limit: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Public, cross-channel topic trends only.
+
+    Private one-video candidates are deliberately excluded: seeing a signal is
+    not enough to claim that a topic is spreading.
+    """
+    clusters = db.scalars(
+        select(TrendCluster)
+        .where(TrendCluster.status.in_(PUBLIC_TREND_STATUSES))
+        .order_by(desc(TrendCluster.trend_score), desc(TrendCluster.last_observed_at))
+        .limit(limit)
+    ).all()
+    private_candidate_count = db.scalar(
+        select(__import__("sqlalchemy").func.count(TrendCluster.id)).where(
+            TrendCluster.status == "PRIVATE_CANDIDATE"
+        )
+    ) or 0
+    return {
+        "items": [_trend_payload(db, cluster) for cluster in clusters],
+        "private_candidate_count": private_candidate_count,
+        "methodology": "Only clusters with independent cross-channel evidence are shown. Views and velocity are observed within this system, not YouTube-wide totals.",
+    }
+
+
+@api_router.get("/youtube/trends/{cluster_id}")
+def get_youtube_trend(cluster_id: str, db: Session = Depends(get_db)) -> dict:
+    cluster = db.get(TrendCluster, cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Topic trend not found")
+    # Detail remains available by ID for auditability, while the list only
+    # publishes cross-channel clusters.
+    return _trend_payload(db, cluster, member_limit=100, snapshot_limit=96)
 
 
 @api_router.get("/youtube/breakouts")

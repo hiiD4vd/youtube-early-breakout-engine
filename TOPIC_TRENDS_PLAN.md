@@ -237,6 +237,13 @@ No endpoint implies global YouTube totals. Field names use `observed_*`.
   Shorts evidence strip.
 - Success: every card links to a detail route and reports only observed data.
 
+**Implemented (2026-08-06):** `/youtube/trends` lists only public
+cross-channel clusters (`EMERGING`, `ACCELERATING`, `CONFIRMED`) and makes the
+number of private candidates explicit instead of publishing them as trends.
+`/youtube/trends/{clusterId}` shows the stored observed-velocity line,
+aggregate metrics, and the member Shorts that support the cluster. The
+previous individual-signal dashboard remains available as **Signal posts**.
+
 ### Phase T4 — Cluster detail and research report
 
 - Build velocity chart, member evidence, channel composition, audit timeline,
