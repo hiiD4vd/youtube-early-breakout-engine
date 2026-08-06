@@ -99,3 +99,19 @@ class TrendSignalFeature(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class TopicClusterFeedback(Base):
+    """Immutable human labels used for auditable active-learning calibration."""
+
+    __tablename__ = "topic_cluster_feedback"
+    __table_args__ = (Index("ix_topic_cluster_feedback_cluster_created", "cluster_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cluster_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("trend_clusters.id", ondelete="CASCADE"), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(96), nullable=False, default="local_reviewer")
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    feature_model: Mapped[str | None] = mapped_column(String(64))
+    snapshot_count_at_review: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

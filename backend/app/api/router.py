@@ -4,19 +4,27 @@ from io import StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.config import settings
 from app.models.youtube_snipe import YoutubeSnipe
-from app.models.trend_cluster import TrendCluster, TrendMembership, TrendSnapshot
+from app.models.trend_cluster import TopicClusterFeedback, TrendCluster, TrendMembership, TrendSnapshot
 from app.services.seed_store import SeedStore
 
 api_router = APIRouter(prefix="/api/v1")
 
 
 PUBLIC_TREND_STATUSES = ("EMERGING", "ACCELERATING", "CONFIRMED")
+REVIEW_DECISIONS = ("CONFIRM_CLUSTER", "REJECT_CLUSTER", "SPLIT_NEEDED", "INSUFFICIENT_EVIDENCE")
+
+
+class TopicFeedbackInput(BaseModel):
+    decision: str
+    note: str | None = Field(default=None, max_length=1000)
+    reviewer: str = Field(default="local_reviewer", min_length=1, max_length=96)
 
 
 def _trend_member_payload(row: YoutubeSnipe, membership: TrendMembership) -> dict:
@@ -274,6 +282,66 @@ def export_youtube_trends_csv(db: Session = Depends(get_db)) -> Response:
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=ycgc-observed-topic-trends.csv"},
     )
+
+
+@api_router.get("/youtube/trends/review-queue")
+def topic_trend_review_queue(
+    limit: int = Query(default=10, ge=1, le=30),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Surface ambiguous post-signal clusters for human labelling only."""
+    candidates = db.scalars(
+        select(TrendCluster)
+        .where(TrendCluster.status.in_(("PRIVATE_CANDIDATE", "EMERGING", "ACCELERATING")))
+        .order_by(desc(TrendCluster.last_observed_at))
+        .limit(100)
+    ).all()
+    reviewed_ids = set(db.scalars(select(TopicClusterFeedback.cluster_id)).all())
+    threshold = settings.topic_lexical_similarity_threshold
+    queue = []
+    for cluster in candidates:
+        # A lone signal is a watch candidate, not a clustering decision. Asking
+        # reviewers to label it would add noise rather than useful supervision.
+        if cluster.id in reviewed_ids or cluster.member_count < 2:
+            continue
+        cohesion = cluster.semantic_cohesion or 0.0
+        # Near the merge threshold and close to public lifecycle are the most
+        # informative examples; one-video candidates are intentionally lower.
+        threshold_uncertainty = max(0.0, 1 - min(1.0, abs(cohesion - threshold) / 0.25))
+        evidence_uncertainty = min(1.0, cluster.member_count / max(1, settings.topic_trends_min_emerging_videos))
+        score = round(0.65 * threshold_uncertainty + 0.35 * evidence_uncertainty, 3)
+        payload = _trend_payload(db, cluster, member_limit=12, snapshot_limit=12)
+        payload["review_uncertainty"] = score
+        payload["review_reason"] = "near similarity threshold with accumulating evidence"
+        queue.append(payload)
+    queue.sort(key=lambda item: item["review_uncertainty"], reverse=True)
+    return {
+        "items": queue[:limit],
+        "decisions": REVIEW_DECISIONS,
+        "methodology": "Human feedback calibrates post-signal clustering only. It never alters anonymous discovery inputs or automatically changes production thresholds.",
+    }
+
+
+@api_router.post("/youtube/trends/{cluster_id}/feedback")
+def submit_topic_trend_feedback(cluster_id: str, payload: TopicFeedbackInput, db: Session = Depends(get_db)) -> dict:
+    if payload.decision not in REVIEW_DECISIONS:
+        raise HTTPException(status_code=422, detail=f"decision must be one of: {', '.join(REVIEW_DECISIONS)}")
+    cluster = db.get(TrendCluster, cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Topic trend not found")
+    feature_model = (cluster.model_metadata or {}).get("feature_model")
+    snapshot_count = db.scalar(select(__import__("sqlalchemy").func.count(TrendSnapshot.id)).where(TrendSnapshot.cluster_id == cluster.id)) or 0
+    feedback = TopicClusterFeedback(
+        cluster_id=cluster.id,
+        reviewer=payload.reviewer.strip(),
+        decision=payload.decision,
+        note=payload.note.strip() if payload.note else None,
+        feature_model=feature_model,
+        snapshot_count_at_review=snapshot_count,
+    )
+    db.add(feedback)
+    db.commit()
+    return {"id": feedback.id, "decision": feedback.decision, "message": "Feedback stored for audit and future calibration; no discovery or threshold was changed automatically."}
 
 
 @api_router.get("/youtube/trends/{cluster_id}")
