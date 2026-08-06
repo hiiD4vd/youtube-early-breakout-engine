@@ -90,7 +90,8 @@ class Settings(BaseSettings):
     market_trends_chart_categories: str = "0,10,24,17"
     market_trends_max_results: int = 50
     market_shorts_verify_interval_minutes: int = 5
-    market_shorts_verify_batch_size: int = 12
+    market_shorts_verify_batch_size: int = 48
+    market_shorts_verify_workers: int = 6
 
     @property
     def sqlalchemy_url(self) -> str:

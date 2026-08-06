@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from celery import Task
@@ -56,8 +57,9 @@ def verify_market_shorts(self: Task) -> dict[str, int | str]:
     try:
         with SessionLocal() as db:
             rows = db.scalars(select(MarketVideo).where(MarketVideo.shorts_status.in_(VERIFYABLE)).order_by(MarketVideo.last_seen_at.desc()).limit(settings.market_shorts_verify_batch_size)).all()
-            for video in rows:
-                status, evidence = _verify(video.video_id)
+            with ThreadPoolExecutor(max_workers=settings.market_shorts_verify_workers) as pool:
+                results = list(pool.map(lambda video: (video, *_verify(video.video_id)), rows))
+            for video, status, evidence in results:
                 video.shorts_status = status
                 provenance = dict(video.source_provenance or {})
                 provenance["shorts_verification"] = evidence
