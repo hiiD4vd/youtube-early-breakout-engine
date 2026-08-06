@@ -54,3 +54,15 @@ When the user asks you to start, please execute in this exact order. Await user 
 *   **Phase 4:** Implement Stage 4 (Next.js Dashboard UI).
 
 *(End of Blueprint)*
+
+## Active project amendments
+
+The following user-approved decisions supersede older wording in this document:
+
+1. Fresh discovery rejects videos at or above **24 hours** old; the earlier
+   72-hour wording is obsolete.
+2. Validated signal history remains in PostgreSQL after the fresh discovery
+   window as auditable research evidence.
+3. Topic Trends is a post-signal clustering layer. It never supplies keywords,
+   topics, or creator lists to anonymous discovery. Its complete implementation
+   plan is `TOPIC_TRENDS_PLAN.md`.
