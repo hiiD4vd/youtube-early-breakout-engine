@@ -97,6 +97,19 @@ and categories, and remains safely idle until `YOUTUBE_DATA_API_KEY` is set.
   and last observed timestamps.
 - Success: user can explain every rank from stored evidence.
 
+## M2.3–M3 implementation order
+
+1. Add Market Topic snapshots and a deterministic score from independent
+   channel count, member count, observed views, freshness, and concentration.
+2. Publish only multi-channel Market Topics through dedicated API endpoints;
+   raw verified Shorts remain evidence, not a false topic.
+3. Point `/youtube/trends` at the Market Topics API and retain a clearly
+   labelled coverage/evidence section.
+4. Add topic detail after ranking is stable, including snapshots, evidence,
+   source mix, and audit timeline.
+5. Review clustering quality after Gemini has enriched a meaningful sample;
+   no automatic threshold mutation.
+
 ### M4 — calibration and 24/7 operation
 
 - Review queue targets uncertain market clusters.

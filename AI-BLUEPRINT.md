@@ -5,7 +5,8 @@
 *   **Project Name:** Y-CGC V4.0 (YouTube Early Breakout Engine)
 *   **Goal:** Build an autonomous, 24/7 background service that discovers "Meme Coins" (videos from random, 0-follower accounts that are going viral from 1k to 1M views) on YouTube Shorts.
 *   **Architecture Pattern:** Fullstack Headless Service (FastAPI Backend + Next.js Frontend).
-*   **Core Philosophy (Zero Bias):** We DO NOT search YouTube using keywords. We DO NOT track a list of Top Creators. We rely entirely on scraping the algorithmic distribution channel (Incognito Feed) to catch pure, unbiased velocity.
+*   **Core Philosophy (No Keyword / No Creator List):** We DO NOT search YouTube using keywords. We DO NOT track a list of Top Creators. We sample the anonymous Shorts distribution surface.
+    *   **Honesty note (supersedes earlier "Zero Bias" wording):** the anonymous Shorts feed is itself curated by YouTube's recommendation system. Our sample therefore represents *videos granted early exposure by the algorithm*, not the population of all uploads, and not proof of purely organic virality. True zero-bias sampling is impossible because YouTube exposes no list of all uploads. We mitigate by (a) sampling multiple neutral region/language profiles, and (b) classifying every detected signal by channel context (UNDERDOG / ESTABLISHED / WHALE) so the audience size behind each signal is measured, not assumed.
 
 ## 2. Tech Stack
 *   **Backend:** Python 3.10+, FastAPI (REST APIs).
@@ -66,3 +67,10 @@ The following user-approved decisions supersede older wording in this document:
 3. Topic Trends is a post-signal clustering layer. It never supplies keywords,
    topics, or creator lists to anonymous discovery. Its complete implementation
    plan is `TOPIC_TRENDS_PLAN.md`.
+4. Seed view counts must be exact integers from the Innertube `player`
+   response. Candidates whose view count survives only as compact feed text
+   ("1.2K views") are rejected (`imprecise_view_count`), because rounding
+   noise (~100 views) exceeds our lowest velocity tier (250/h).
+5. Every signal is classified by channel context (UNDERDOG / ESTABLISHED /
+   PROVEN_WINNER / WHALE) via subscriber count + recent-view history. The
+   "0-follower meme coin" claim is only valid for rows classified UNDERDOG.

@@ -8,8 +8,17 @@ independent for thesis development.
 
 1. Copy `.env.example` to `.env` and change `POSTGRES_PASSWORD` and the matching
    `DATABASE_URL` password.
-2. Start infrastructure and backend: `docker compose up --build`.
-3. In a separate terminal, run `cd frontend`, `npm install`, then `npm run dev`.
+2. Recommended one-shot start from the repo root:
+
+   `.\run-all.ps1`
+
+3. Manual fallback if you want to run things step by step:
+
+   - `docker compose up --build -d`
+   - `docker compose exec -T backend alembic upgrade head`
+   - `cd frontend`
+   - `npm run dev:clean`
+
 4. Open `http://localhost:3010`; the API health endpoint is `http://localhost:8010/health`.
 
 ## Database migration
