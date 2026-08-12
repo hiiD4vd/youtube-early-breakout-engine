@@ -34,6 +34,20 @@ services:
         condition: service_started
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8010
+    ports:
+      - "3010:3010"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    command: npm run dev
+
   celery_worker:
     build: ./backend
     env_file: .env
@@ -44,4 +58,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    command: celery -A app.tasks.celery_app worker -B --loglevel=info -Q default --concurrency=2
+    command: celery -A app.tasks.celery_app worker --loglevel=info -Q default --concurrency=2
+
+  celery_intelligence_worker:
+    build: ./backend
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    # One model request lane keeps costs and provider limits predictable,
+    # without blocking the two discovery/verification processes above.
+    command: celery -A app.tasks.celery_app worker --loglevel=info -Q intelligence --concurrency=1
+
+  celery_beat:
+    build: ./backend
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_started
+    command: celery -A app.tasks.celery_app beat --loglevel=info
