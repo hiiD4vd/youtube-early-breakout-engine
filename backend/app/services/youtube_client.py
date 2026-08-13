@@ -37,7 +37,12 @@ class YoutubeAnonymousClient:
         self.client.close()
 
     def discover_seeds(
-        self, *, max_pages: int | None = None, max_accepted: int | None = None
+        self,
+        *,
+        max_pages: int | None = None,
+        max_accepted: int | None = None,
+        max_age_hours: int | None = None,
+        require_exact_views: bool = True,
     ) -> tuple[list[YoutubeSeed], SeedDiscoveryResult]:
         max_pages = max_pages or settings.youtube_seed_pages_per_run
         max_accepted = max_accepted or settings.youtube_seed_limit_per_run
@@ -70,7 +75,11 @@ class YoutubeAnonymousClient:
                             api_key, client_version, visitor_data, candidate_id
                         )
                     candidate.update(metadata_cache[candidate_id])
-                seed, reason = self._to_seed(candidate)
+                seed, reason = self._to_seed(candidate, max_age_hours=max_age_hours)
+                if seed and require_exact_views and seed.view_count_precision != "exact":
+                    # Rounded feed text ("1.2K views") as a velocity baseline is
+                    # noise up to ~100 views; our tiers start at 250/h. Reject.
+                    seed, reason = None, "imprecise_view_count"
                 if reason == "too_old":
                     result.seeds_rejected_age += 1
                 elif reason:
@@ -174,9 +183,11 @@ class YoutubeAnonymousClient:
             "channel_title": details.get("author"),
             "title": details.get("title"),
             "view_count": self._parse_view_count(details.get("viewCount")),
+            "view_count_precision": "exact",
             "published_at": self._parse_published_date(
                 microformat.get("uploadDate") or microformat.get("publishDate")
             ),
+            "published_at_precision": "day",
             "thumbnail_url": thumbnail_url,
         }
 
@@ -186,13 +197,16 @@ class YoutubeAnonymousClient:
             video_id = node.get("videoId")
             if not isinstance(video_id, str) or not re.fullmatch(r"[\w-]{11}", video_id):
                 continue
+            view_text = self._first_text(node, ("shortViewCountText", "viewCountText", "viewCount"))
             candidates.append({
                 "video_id": video_id,
                 "channel_id": self._first_channel_id(node),
                 "channel_title": self._first_text(node, ("shortBylineText", "ownerText", "longBylineText")),
                 "title": self._first_text(node, ("headline", "title")),
-                "view_count": self._parse_view_count(self._first_text(node, ("shortViewCountText", "viewCountText", "viewCount"))),
+                "view_count": self._parse_view_count(view_text),
+                "view_count_precision": "rounded" if self._is_compact_count(view_text) else "exact",
                 "published_at": self._parse_relative_time(self._first_text(node, ("publishedTimeText", "timestampText"))),
+                "published_at_precision": "hour",
                 "thumbnail_url": self._first_thumbnail_url(node),
             })
         return candidates
@@ -243,6 +257,14 @@ class YoutubeAnonymousClient:
         return None
 
     @staticmethod
+    def _is_compact_count(value: str | None) -> bool:
+        """True when the source text uses a compact suffix (1.2K) = rounded."""
+        if not value:
+            return False
+        normalized = value.lower().replace(",", "").replace("views", "").replace("view", "").strip()
+        return bool(re.search(r"\d\s*[kmb]\b", normalized))
+
+    @staticmethod
     def _parse_view_count(value: str | None) -> int | None:
         if not value:
             return None
@@ -278,11 +300,12 @@ class YoutubeAnonymousClient:
         return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     @staticmethod
-    def _to_seed(candidate: dict[str, Any]) -> tuple[YoutubeSeed | None, str | None]:
+    def _to_seed(candidate: dict[str, Any], *, max_age_hours: int | None = None) -> tuple[YoutubeSeed | None, str | None]:
         video_id, channel_id = candidate.get("video_id"), candidate.get("channel_id")
         view_count, published_at = candidate.get("view_count"), candidate.get("published_at")
         if not video_id or not channel_id or view_count is None or not published_at:
             return None, "incomplete"
-        if datetime.now(UTC) - published_at > timedelta(hours=settings.youtube_seed_max_age_hours):
+        permitted_age = max_age_hours if max_age_hours is not None else settings.youtube_seed_max_age_hours
+        if datetime.now(UTC) - published_at > timedelta(hours=permitted_age):
             return None, "too_old"
-        return YoutubeSeed(video_id=video_id, channel_id=channel_id, channel_title=candidate.get("channel_title"), title=candidate.get("title"), seed_view_count=view_count, published_at=published_at, seeded_at=datetime.now(UTC), video_url=f"{YOUTUBE_ORIGIN}/shorts/{video_id}", thumbnail_url=candidate.get("thumbnail_url")), None
+        return YoutubeSeed(video_id=video_id, channel_id=channel_id, channel_title=candidate.get("channel_title"), title=candidate.get("title"), seed_view_count=view_count, published_at=published_at, seeded_at=datetime.now(UTC), video_url=f"{YOUTUBE_ORIGIN}/shorts/{video_id}", thumbnail_url=candidate.get("thumbnail_url"), view_count_precision=candidate.get("view_count_precision", "exact"), published_at_precision=candidate.get("published_at_precision", "hour")), None
