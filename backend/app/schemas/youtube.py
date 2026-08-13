@@ -15,6 +15,12 @@ class YoutubeSeed(BaseModel):
     seeded_at: datetime
     video_url: str
     thumbnail_url: str | None = None
+    # Precision provenance: "exact" = integer from Innertube player response,
+    # "rounded" = parsed from compact feed text like "1.2K views".
+    view_count_precision: str = "exact"
+    # "day" = derived from uploadDate, "hour" = derived from relative text like
+    # "2 hours ago" (error up to 1 hour).
+    published_at_precision: str = "hour"
     source: str = "anonymous_shorts_feed"
     source_version: str = "youtubei-reel-v1"
 
