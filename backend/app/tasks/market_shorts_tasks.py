@@ -41,10 +41,22 @@ def _verify(video_id: str) -> tuple[str, dict]:
     info = json.loads(result.stdout)
     width, height = _dimensions(info)
     duration = float(info.get("duration") or 0)
-    evidence = {"width": width, "height": height, "duration_seconds": duration, "verified_at": datetime.now(UTC).isoformat()}
+    evidence = {
+        "width": width,
+        "height": height,
+        "duration_seconds": duration,
+        "verified_at": datetime.now(UTC).isoformat(),
+    }
+    # Product rule: this dashboard must contain genuine vertical/square Shorts
+    # only. A short-duration landscape video is still rejected, regardless of
+    # which source returned it.
     if 0 < duration <= 180 and width > 0 and height >= width:
         return "VERIFIED_SHORTS", evidence
-    return "REJECTED_NOT_SHORTS", evidence
+    if width > 0 and height > 0 and width > height:
+        return "REJECTED_NOT_SHORTS", {**evidence, "reason": "landscape_video"}
+    if duration > 180:
+        return "REJECTED_NOT_SHORTS", {**evidence, "reason": "duration_over_180_seconds"}
+    return "VERIFY_FAILED", {**evidence, "reason": "metadata_inconclusive"}
 
 
 @celery_app.task(bind=True, name="app.tasks.market_shorts_tasks.verify_market_shorts", soft_time_limit=330, time_limit=360)
