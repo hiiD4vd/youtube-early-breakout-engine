@@ -1,0 +1,22 @@
+
+> ycgc-v4-frontend@4.0.0 dev
+> next dev -p 3010
+
+[32m✔[0m [33mConsole Ninja[0m extension is connected to [33mNext.js[0m, see [36mhttps://tinyurl.com/2vt8jxzw[0m
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3010
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.3s
+ ○ Compiling /youtube/video-trends ...
+ ✓ Compiled /youtube/video-trends in 1394ms (506 modules)
+ GET /youtube/video-trends 200 in 1585ms
+ GET /youtube/video-trends 200 in 48ms
+ ✓ Compiled /youtube/trends in 501ms (512 modules)
+ GET /youtube/trends 200 in 646ms
+ GET /youtube/trends 200 in 49ms
+ GET /youtube/trends 200 in 33ms
+ ✓ Compiled /youtube/early-topics in 372ms (518 modules)
+ ✓ Compiled in 1726ms (532 modules)
+[?25h

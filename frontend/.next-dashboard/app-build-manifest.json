@@ -1,0 +1,135 @@
+{
+  "pages": {
+    "/_not-found/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/app/_not-found/page-3ee5613e3fb5b60d.js"
+    ],
+    "/layout": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/css/58c37735db255bc6.css",
+      "static/chunks/648-59db86f2ce39ed09.js",
+      "static/chunks/app/layout-d2afc62e9b32d55c.js"
+    ],
+    "/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/app/page-c0575d597b69f53c.js"
+    ],
+    "/youtube/demo/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/app/youtube/demo/page-f8ca07fdbc4330a3.js"
+    ],
+    "/youtube/early-topics/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/648-59db86f2ce39ed09.js",
+      "static/chunks/app/youtube/early-topics/page-e4923cb61f6d0aeb.js"
+    ],
+    "/youtube/admin/apify/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/admin/apify/page-9af9e1ffb746d1ee.js"
+    ],
+    "/youtube/report/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/report/page-08af5471f6ca21dd.js"
+    ],
+    "/youtube/evaluation/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/evaluation/page-1da08965d6904a0e.js"
+    ],
+    "/youtube/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/page-6659c88f3dee8572.js"
+    ],
+    "/youtube/review/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/review/page-51ba3b54f25768f1.js"
+    ],
+    "/youtube/trends/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/648-59db86f2ce39ed09.js",
+      "static/chunks/app/youtube/trends/page-5cbed22cab9ad531.js"
+    ],
+    "/youtube/trends/market/[topicId]/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/648-59db86f2ce39ed09.js",
+      "static/chunks/app/youtube/trends/market/[topicId]/page-001ed478c527e797.js"
+    ],
+    "/youtube/video-trends/[videoId]/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/video-trends/[videoId]/page-78e20be5ad04d493.js"
+    ],
+    "/youtube/video-trends/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/app/youtube/video-trends/page-f039fc6bd34eacca.js"
+    ],
+    "/youtube/trends/[clusterId]/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/648-59db86f2ce39ed09.js",
+      "static/chunks/app/youtube/trends/[clusterId]/page-cbcc35663a33f307.js"
+    ],
+    "/youtube/trends/topic/[topicId]/page": [
+      "static/chunks/webpack-616e068a201ad621.js",
+      "static/chunks/fd9d1056-6ccd27540209e9e4.js",
+      "static/chunks/117-12892ff0048e3c9c.js",
+      "static/chunks/main-app-1eabc5ca7519a310.js",
+      "static/chunks/861-71f1bb16c33816fc.js",
+      "static/chunks/648-59db86f2ce39ed09.js",
+      "static/chunks/app/youtube/trends/topic/[topicId]/page-e3e91eba6a1b2f60.js"
+    ]
+  }
+}
