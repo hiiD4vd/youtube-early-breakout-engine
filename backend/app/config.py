@@ -115,7 +115,27 @@ class Settings(BaseSettings):
     market_general_chart_regions_per_run: int = 4
     market_general_chart_interval_minutes: int = 10
     market_general_chart_max_results: int = 50
+    # Follow nextPageToken up to this many pages per region. The `mostPopular`
+    # chart exposes roughly 200 videos per country via pagination (4 pages of
+    # 50); this replaces the retired InnerTube browse surface as the broad
+    # general-video discovery lane.
+    market_general_chart_max_pages: int = 4
     market_general_chart_catalog_ttl_seconds: int = 604_800
+    # Experimental innerTube general-video lane.  This is isolated from the
+    # public chart collector so we can compare source quality without changing
+    # the existing video trends page.
+    #
+    # The defaults below are intentionally wider than the early Shorts seed
+    # lanes: we want this collector to behave more like a broad trends panel,
+    # not a tiny sample.
+    youtube_general_innertube_enabled: bool = True
+    youtube_general_innertube_target_regions: int = 110
+    youtube_general_innertube_regions_per_run: int = 8
+    youtube_general_innertube_interval_minutes: int = 10
+    youtube_general_innertube_max_results: int = 100
+    youtube_general_innertube_search_enabled: bool = False
+    youtube_general_innertube_search_terms: str = "music,vlog,gaming,news,review,travel,food"
+    youtube_general_innertube_search_interval_minutes: int = 60
     # Official latest-video lane. It supplements (not replaces) the
     # anonymous Shorts feed and public chart. There is deliberately no query
     # keyword: each region gets its own independent latest sample.
@@ -149,6 +169,10 @@ class Settings(BaseSettings):
     market_shorts_verify_interval_minutes: int = 5
     market_shorts_verify_batch_size: int = 48
     market_shorts_verify_workers: int = 6
+    # Title-overlap fallback topics are only useful while the semantic provider
+    # is down. When the provider is healthy this lexical fallback fragments the
+    # topic table (one topic per title word), so it is disabled by default.
+    market_title_overlap_fallback_enabled: bool = False
     # Reserved only; no third-party source is active until explicitly enabled.
     apify_enabled: bool = False
     apify_token: str = ""
@@ -173,15 +197,15 @@ class Settings(BaseSettings):
     market_semantic_concurrency: int = 6
     # Market semantic extraction is provider-agnostic. The default gateway
     # is OpenAI-compatible and intentionally replaces Gemini Flash here.
-    market_semantic_base_url: str = ""
+    market_semantic_base_url: str = "https://bandelbanget.xyz/v1"
     market_semantic_api_key: str = ""
-    market_semantic_model: str = "gpt-5.6"
+    market_semantic_model: str = "glm-5.2"
     # Optional admin token to protect runtime admin endpoints. When empty, admin
     # endpoints remain unguarded for local development convenience.
     admin_api_token: str = ""
     # A stronger model is used only after multiple Shorts already form one
     # candidate conversation. It is intentionally not used per video.
-    market_topic_review_model: str = "gpt-5.6"
+    market_topic_review_model: str = "deepseek-v4-pro"
     market_topic_review_batch_size: int = 4
     # Content truth checks are triggered only for candidate events. They are
     # deliberately bounded because each one may fetch captions and use vision.
