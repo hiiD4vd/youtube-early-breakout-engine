@@ -12,7 +12,7 @@ celery_app = Celery(
     "ycgc_v4",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_latest_tasks", "app.tasks.market_shorts_tasks", "app.tasks.market_feed_tasks", "app.tasks.market_feature_tasks", "app.tasks.market_gemini_tasks", "app.tasks.market_cluster_tasks", "app.tasks.market_topic_scoring_tasks", "app.tasks.market_fallback_topics_tasks", "app.tasks.market_metadata_tasks", "app.tasks.market_semantic_topic_tasks", "app.tasks.market_trending_topics_tasks", "app.tasks.market_content_truth_tasks", "app.tasks.market_apify_tasks", "app.tasks.external_benchmark_tasks"],
+    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_latest_tasks", "app.tasks.market_shorts_tasks", "app.tasks.market_feed_tasks", "app.tasks.market_feature_tasks", "app.tasks.market_gemini_tasks", "app.tasks.market_cluster_tasks", "app.tasks.market_topic_scoring_tasks", "app.tasks.market_fallback_topics_tasks", "app.tasks.market_metadata_tasks", "app.tasks.market_semantic_topic_tasks", "app.tasks.market_trending_topics_tasks", "app.tasks.market_content_truth_tasks", "app.tasks.market_apify_tasks", "app.tasks.youtube_general_tasks", "app.tasks.external_benchmark_tasks"],
 )
 celery_app.conf.update(
     timezone="UTC",
@@ -64,6 +64,10 @@ celery_app.conf.update(
             "task": "app.tasks.market_trends_tasks.collect_general_video_chart",
             "schedule": settings.market_general_chart_interval_minutes * 60,
         }
+        ,"collect-youtube-general-innertube-trends": {
+            "task": "app.tasks.youtube_general_tasks.collect_youtube_general_innertube_trends",
+            "schedule": settings.youtube_general_innertube_interval_minutes * 60,
+        }
         ,"collect-youtube-market-latest": {
             "task": "app.tasks.market_latest_tasks.collect_market_latest",
             "schedule": settings.market_latest_interval_minutes * 60,
@@ -80,7 +84,6 @@ celery_app.conf.update(
             "task": "app.tasks.market_feed_tasks.seed_fresh_early_from_market_reel",
             "schedule": 10 * 60,
         }
-        ,"collect-market-apify-shorts": {"task":"app.tasks.market_apify_tasks.collect_apify_shorts","schedule":settings.apify_interval_minutes * 60}
         ,"build-market-shorts-features": {"task":"app.tasks.market_feature_tasks.build_market_video_features","schedule":300}
         ,"enrich-market-short-semantics": {"task":"app.tasks.market_gemini_tasks.enrich_market_topics","schedule":settings.market_gemini_interval_minutes * 60}
         # Per-video semantic enrichment is bounded and routed to the separate
@@ -91,6 +94,7 @@ celery_app.conf.update(
         ,"build-market-title-overlap-candidates": {"task":"app.tasks.market_fallback_topics_tasks.build_title_overlap_candidates","schedule":600}
         ,"detect-market-metadata-bursts": {"task":"app.tasks.market_metadata_tasks.detect_market_metadata_bursts","schedule":900}
         ,"name-market-metadata-clusters": {"task":"app.tasks.market_semantic_topic_tasks.name_metadata_clusters","schedule":900}
+        ,"recover-rejected-semantic-themes": {"task":"app.tasks.market_semantic_topic_tasks.recover_rejected_semantic_themes","schedule":900}
         # A bounded GPT review validates retained clusters after independent
         # cross-channel evidence exists; it is never a polling loop per video.
         ,"build-market-trending-topics": {"task":"app.tasks.market_trending_topics_tasks.build_trending_topics","schedule":600}
@@ -98,5 +102,14 @@ celery_app.conf.update(
         # before an event may remain on the public leaderboard.
         ,"audit-market-content-truth": {"task":"app.tasks.market_content_truth_tasks.audit_market_content_truth","schedule":settings.market_content_truth_interval_minutes * 60}
         ,"match-external-trend-benchmarks": {"task":"app.tasks.external_benchmark_tasks.match_external_benchmarks","schedule":settings.external_benchmark_interval_minutes * 60}
-    },
+    } | (
+        {
+            "collect-market-apify-shorts": {
+                "task": "app.tasks.market_apify_tasks.collect_apify_shorts",
+                "schedule": settings.apify_interval_minutes * 60,
+            }
+        }
+        if settings.apify_enabled
+        else {}
+    ),
 )
