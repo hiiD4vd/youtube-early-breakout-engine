@@ -27,6 +27,12 @@ services:
       - "8010:8000"
     volumes:
       - ./backend:/app
+    # Docker Desktop's embedded DNS occasionally stopped resolving every
+    # external host on this machine. Explicit resolvers keep YouTube and the
+    # semantic gateway independent from that transient cache failure.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,6 +42,10 @@ services:
 
   frontend:
     build: ./frontend
+    # Local development uses `npm run dev` from one terminal. Keeping this
+    # behind an explicit profile prevents Docker and the host from competing
+    # for port 3010 and corrupting the same Next.js chunk cache.
+    profiles: ["frontend"]
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8010
     ports:
@@ -44,15 +54,19 @@ services:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
+      - /app/.next-dashboard
     depends_on:
       - backend
-    command: npm run dev
+    command: npm run dev:server
 
   celery_worker:
     build: ./backend
     env_file: .env
     volumes:
       - ./backend:/app
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +79,9 @@ services:
     env_file: .env
     volumes:
       - ./backend:/app
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +96,9 @@ services:
     env_file: .env
     volumes:
       - ./backend:/app
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       redis:
         condition: service_started
