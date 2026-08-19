@@ -13,6 +13,7 @@ celerybeat-schedule*
 # Next.js
 frontend/node_modules/
 frontend/.next/
+frontend/.next-dashboard/
 *.tsbuildinfo
 
 # Docker
