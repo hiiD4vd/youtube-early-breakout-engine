@@ -1,4 +1,6 @@
 import csv
+import httpx
+from collections import defaultdict
 from hashlib import sha256
 from datetime import UTC, datetime, timedelta
 from io import StringIO
@@ -6,7 +8,7 @@ from io import StringIO
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import case, desc, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,7 +17,9 @@ from app.models.youtube_snipe import YoutubeSnipe
 from app.models.trend_cluster import TopicClusterFeedback, TrendCluster, TrendMembership, TrendSnapshot
 from app.models.market_trends import ExternalTrendBenchmark, MarketContentTruthAudit, MarketMetadataTrend, MarketMetadataTrendMembership, MarketMetadataTrendSnapshot, MarketRankedTopic, MarketRankedTopicMembership, MarketRankedTopicReview, MarketRankedTopicSnapshot, MarketSourceRun, MarketTopic, MarketTopicFeedback, MarketTopicMembership, MarketTopicSnapshot, MarketVideo, MarketVideoFeature, MarketVideoObservation
 from app.services.seed_store import SeedStore
+from app.services.market_semantic_client import MarketSemanticClient
 from app.tasks.celery_app import celery_app
+from app.tasks.market_feature_tasks import build_market_video_features_for_db
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -29,6 +33,47 @@ NON_FOLLOWABLE_TOPIC_LABELS = {"animals", "food", "music", "comedy", "entertainm
 def _semantic_cooldown_key() -> str:
     identity = f"{settings.market_semantic_base_url}|{settings.market_semantic_model}"
     return f"ycgc:youtube:market-semantic-gateway-cooldown:{sha256(identity.encode()).hexdigest()[:12]}"
+
+
+@api_router.post("/youtube/market/semantic-provider-check")
+def check_market_semantic_provider() -> dict:
+    """Make one tiny, real provider request and expose no credentials."""
+    store = SeedStore()
+    checked_at = datetime.now(UTC).isoformat()
+    if not settings.market_semantic_api_key or not settings.market_semantic_base_url:
+        return {"status": "not_configured", "checked_at": checked_at, "model": settings.market_semantic_model}
+    try:
+        facts = MarketSemanticClient().analyze(
+            "A cat carefully opens a kitchen drawer",
+            "A short factual clip showing one cat opening a drawer.",
+        )
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        store.set_status(
+            market_semantic_provider_state="error",
+            market_semantic_provider_last_check_at=checked_at,
+            market_semantic_provider_last_error=f"HTTP {status_code}",
+        )
+        return {"status": "error", "checked_at": checked_at, "model": settings.market_semantic_model, "error_type": "HTTPStatusError", "http_status": status_code}
+    except Exception as exc:
+        store.set_status(
+            market_semantic_provider_state="error",
+            market_semantic_provider_last_check_at=checked_at,
+            market_semantic_provider_last_error=type(exc).__name__,
+        )
+        return {"status": "error", "checked_at": checked_at, "model": settings.market_semantic_model, "error_type": type(exc).__name__}
+    store.client.delete(_semantic_cooldown_key())
+    store.set_status(
+        market_semantic_provider_state="healthy",
+        market_semantic_provider_last_check_at=checked_at,
+        market_semantic_provider_last_error="",
+    )
+    return {
+        "status": "ok",
+        "checked_at": checked_at,
+        "model": settings.market_semantic_model,
+        "sample_label": facts.topic_label,
+    }
 
 
 class TopicFeedbackInput(BaseModel):
@@ -95,21 +140,78 @@ def _trend_snapshot_payload(snapshot: TrendSnapshot) -> dict:
     }
 
 
-def _trend_payload(db: Session, cluster: TrendCluster, *, member_limit: int = 5, snapshot_limit: int = 12) -> dict:
-    members = db.execute(
-        select(YoutubeSnipe, TrendMembership)
-        .join(TrendMembership, TrendMembership.youtube_snipe_id == YoutubeSnipe.id)
-        .where(TrendMembership.cluster_id == cluster.id)
-        .order_by(desc(YoutubeSnipe.velocity_per_hour))
-        .limit(member_limit)
-    ).all()
-    snapshots = db.scalars(
-        select(TrendSnapshot)
-        .where(TrendSnapshot.cluster_id == cluster.id)
-        .order_by(desc(TrendSnapshot.observed_at))
-        .limit(snapshot_limit)
-    ).all()
-    snapshots.reverse()
+def _trend_payload(db: Session, cluster: TrendCluster, *, member_limit: int = 5, snapshot_limit: int = 12, full_evidence_totals: bool = False, prefetched_members: list[tuple[YoutubeSnipe, TrendMembership]] | None = None, prefetched_snapshots: list[TrendSnapshot] | None = None) -> dict:
+    if prefetched_members is None:
+        all_members = db.execute(
+            select(YoutubeSnipe, TrendMembership)
+            .join(TrendMembership, TrendMembership.youtube_snipe_id == YoutubeSnipe.id)
+            .where(TrendMembership.cluster_id == cluster.id)
+            .order_by(desc(YoutubeSnipe.velocity_per_hour))
+        ).all()
+    else:
+        all_members = prefetched_members
+    if prefetched_snapshots is None:
+        snapshots = db.scalars(
+            select(TrendSnapshot)
+            .where(TrendSnapshot.cluster_id == cluster.id)
+            .order_by(desc(TrendSnapshot.observed_at))
+            .limit(snapshot_limit)
+        ).all()
+        snapshots.reverse()
+    else:
+        snapshots = list(prefetched_snapshots)[:snapshot_limit]
+        snapshots.reverse()
+    now = datetime.now(UTC)
+    published_ages = [
+        max(0.0, (now - row.published_at.astimezone(UTC)).total_seconds() / 3600)
+        for row, _membership in all_members
+    ]
+    newest_age_hours = min(published_ages) if published_ages else None
+    oldest_age_hours = max(published_ages) if published_ages else None
+    fresh_24h_count = sum(1 for age in published_ages if age <= 24)
+    fresh_72h_count = sum(1 for age in published_ages if age <= 72)
+    duplicate_count = sum(1 for _row, membership in all_members if membership.is_same_channel_duplicate)
+    reupload_suspect_count = sum(1 for _row, membership in all_members if membership.is_reupload_suspect)
+    evidence_views = sum(max(0, row.current_view_count) for row, _membership in all_members)
+
+    movement = "COLLECTING_HISTORY"
+    velocity_change_percent = None
+    if len(snapshots) >= 2:
+        previous_velocity = max(0.0, snapshots[-2].observed_velocity_per_hour)
+        latest_velocity = max(0.0, snapshots[-1].observed_velocity_per_hour)
+        if previous_velocity > 0:
+            velocity_change_percent = ((latest_velocity - previous_velocity) / previous_velocity) * 100
+            if velocity_change_percent >= 15:
+                movement = "RISING"
+            elif velocity_change_percent <= -15:
+                movement = "FALLING"
+            else:
+                movement = "STABLE"
+
+    status_explanations = {
+        "PRIVATE_CANDIDATE": "Pola sudah terlihat, tetapi identitas topik atau buktinya belum cukup kuat untuk dipublikasikan.",
+        "EMERGING": "Topik mulai muncul dari beberapa video dan kreator independen.",
+        "ACCELERATING": "Kecepatan pertumbuhan topik meningkat pada pengamatan terbaru.",
+        "CONFIRMED": "Topik telah memiliki bukti lintas-channel yang cukup kuat.",
+        "COOLING": "Topik pernah terdeteksi, tetapi bukti atau pertumbuhannya sedang melambat.",
+        "ARCHIVED": "Topik tidak lagi aktif dalam jendela pemantauan saat ini.",
+    }
+    region_count = len(cluster.region_mix or {})
+    human_summary = {
+        "status_explanation": status_explanations.get(cluster.status, "Topik sedang dipantau oleh sistem."),
+        "fresh_24h_count": fresh_24h_count,
+        "fresh_72h_count": fresh_72h_count,
+        "newest_evidence_age_hours": round(newest_age_hours, 1) if newest_age_hours is not None else None,
+        "oldest_evidence_age_hours": round(oldest_age_hours, 1) if oldest_age_hours is not None else None,
+        "evidence_views": evidence_views,
+        "duplicate_count": duplicate_count,
+        "reupload_suspect_count": reupload_suspect_count,
+        "history_points": len(snapshots),
+        "movement": movement,
+        "velocity_change_percent": round(velocity_change_percent, 1) if velocity_change_percent is not None else None,
+        "region_count": region_count,
+        "region_data_available": region_count > 0,
+    }
     return {
         "id": str(cluster.id),
         "public_slug": cluster.public_slug,
@@ -119,18 +221,19 @@ def _trend_payload(db: Session, cluster: TrendCluster, *, member_limit: int = 5,
         "status": cluster.status,
         "trend_score": cluster.trend_score,
         "semantic_cohesion": cluster.semantic_cohesion,
-        "observed_views": cluster.observed_views,
-        "observed_velocity_per_hour": cluster.observed_velocity_per_hour,
+        "observed_views": evidence_views if full_evidence_totals else cluster.observed_views,
+        "observed_velocity_per_hour": sum(max(0.0, row.velocity_per_hour) for row, _membership in all_members) if full_evidence_totals else cluster.observed_velocity_per_hour,
         "acceleration": cluster.acceleration,
-        "member_count": cluster.member_count,
-        "channel_count": cluster.channel_count,
+        "member_count": len(all_members) if full_evidence_totals else cluster.member_count,
+        "channel_count": len({row.channel_id for row, _membership in all_members}) if full_evidence_totals else cluster.channel_count,
         "first_detected_at": cluster.first_detected_at.isoformat(),
         "last_observed_at": cluster.last_observed_at.isoformat() if cluster.last_observed_at else None,
         "region_mix": cluster.region_mix or {},
         "channel_context_mix": cluster.channel_context_mix or {},
         "evidence_summary": cluster.evidence_summary or {},
+        "human_summary": human_summary,
         "cluster_reason": cluster.cluster_reason,
-        "members": [_trend_member_payload(row, membership) for row, membership in members],
+        "members": [_trend_member_payload(row, membership) for row, membership in all_members[:member_limit]],
         "snapshots": [_trend_snapshot_payload(snapshot) for snapshot in snapshots],
     }
 
@@ -310,7 +413,7 @@ def market_coverage(db: Session = Depends(get_db)) -> dict:
     verification = dict(db.execute(
         select(MarketVideo.shorts_status, func.count(MarketVideo.id)).group_by(MarketVideo.shorts_status)
     ).all())
-    verified_total = int(verification.get("VERIFIED_SHORTS", 0))
+    feature_total = db.scalar(select(func.count(MarketVideoFeature.id))) or 0
     semantic_ready = sum(
         1
         for provenance in db.scalars(select(MarketVideoFeature.provenance)).all()
@@ -343,6 +446,7 @@ def market_coverage(db: Session = Depends(get_db)) -> dict:
             "ok_runs": 0, "error_runs": 0, "candidates_seen": 0, "accepted_shorts": 0,
             "unique_shorts": 0, "duplicate_shorts": 0, "fresh_0_24h": 0,
             "fresh_24_72h": 0, "rejected_not_shorts": 0, "last_run_at": None,
+            "last_error_type": None, "last_error": None,
         })
         entry["runs"] += 1
         entry["ok_runs"] += int(run.status == "OK")
@@ -351,8 +455,12 @@ def market_coverage(db: Session = Depends(get_db)) -> dict:
             entry[field] += int(getattr(run, field) or 0)
         if entry["last_run_at"] is None or (run.started_at and run.started_at > datetime.fromisoformat(entry["last_run_at"])):
             entry["last_run_at"] = run.started_at.isoformat() if run.started_at else None
+            if run.status == "ERROR":
+                entry["last_error_type"] = run.error_type
+                entry["last_error"] = str((run.details or {}).get("error") or "")[:280] or None
     apify = {
-        "state": status.get("apify_market_state", "not_run"),
+        "enabled": settings.apify_enabled,
+        "state": status.get("apify_market_state", "not_run") if settings.apify_enabled else "disabled",
         "invalid": int(status.get("apify_market_invalid", 0)),
         "failed_batches": int(status.get("apify_market_failed_batches", 0)),
         "last_scan_at": status.get("apify_market_last_scan_at"),
@@ -363,6 +471,23 @@ def market_coverage(db: Session = Depends(get_db)) -> dict:
         "failed_last_batch": int(status.get("market_shorts_failed", 0)),
         "last_verify_at": status.get("market_shorts_last_verify_at"),
     }
+    metadata_statuses = dict(
+        db.execute(
+            select(MarketMetadataTrend.semantic_status, func.count(MarketMetadataTrend.id))
+            .group_by(MarketMetadataTrend.semantic_status)
+        ).all()
+    )
+    market_topic_counts = {
+        "all_rows": db.scalar(select(func.count(MarketTopic.id))) or 0,
+        "multi_video_multi_channel": db.scalar(
+            select(func.count(MarketTopic.id)).where(
+                MarketTopic.member_count >= 2,
+                MarketTopic.channel_count >= 2,
+            )
+        ) or 0,
+    }
+    semantic_store = SeedStore()
+    semantic_cooldown_ttl = max(0, int(semantic_store.client.ttl(_semantic_cooldown_key()) or 0))
     return {
         "window_hours": settings.market_metadata_window_hours,
         "verified_unique_shorts": len(unique_videos),
@@ -382,7 +507,21 @@ def market_coverage(db: Session = Depends(get_db)) -> dict:
         "last_verification_batch": shorts_verification,
         "apify_health": apify,
         "source_run_health": sorted(run_health.values(), key=lambda item: (item["lane"], item["region"])),
-        "semantic_backlog": max(0, verified_total - semantic_ready),
+        "semantic_backlog": max(0, int(feature_total) - semantic_ready),
+        "semantic_pipeline": {
+            "ready_videos": semantic_ready,
+            "waiting_videos": max(0, int(feature_total) - semantic_ready),
+            "batch_size": settings.market_gemini_batch_size,
+            "interval_minutes": settings.market_gemini_interval_minutes,
+            "max_requests_per_hour": int(settings.market_gemini_batch_size * 60 / max(1, settings.market_gemini_interval_minutes)),
+            "provider_cooldown_seconds": semantic_cooldown_ttl,
+            "provider_state": status.get("market_semantic_provider_state", "unknown"),
+            "provider_last_error": status.get("market_semantic_provider_last_error") or None,
+            "provider_last_error_at": status.get("market_semantic_provider_last_error_at"),
+            "provider_last_success_at": status.get("market_semantic_provider_last_success_at"),
+        },
+        "metadata_candidate_statuses": metadata_statuses,
+        "market_topic_counts": market_topic_counts,
         "methodology": "Unique verified Shorts observed by this system within the active window. A source scan may repeat a video, but coverage counts it once per lane/region. Cohort health reports new versus repeated Shorts separately. This is observed coverage, not all of YouTube.",
     }
 
@@ -441,6 +580,10 @@ def _general_region_health(
     regions: list[str],
     *,
     now: datetime,
+    source_lane: str = "official_general_chart",
+    target_regions: int | None = None,
+    regions_per_run: int | None = None,
+    interval_minutes: int | None = None,
 ) -> list[dict]:
     """Report per-region collector freshness for the rotating general chart.
 
@@ -453,9 +596,9 @@ def _general_region_health(
         return []
     # One full rotation is the honest freshness budget; anything older than
     # two cycles means this region genuinely missed its turn.
-    per_run = max(1, settings.market_general_chart_regions_per_run)
-    target = max(1, settings.market_general_chart_target_regions)
-    cycle_minutes = ((target + per_run - 1) // per_run) * settings.market_general_chart_interval_minutes
+    per_run = max(1, regions_per_run or settings.market_general_chart_regions_per_run)
+    target = max(1, target_regions or settings.market_general_chart_target_regions)
+    cycle_minutes = ((target + per_run - 1) // per_run) * max(1, interval_minutes or settings.market_general_chart_interval_minutes)
     stale_after = timedelta(minutes=cycle_minutes * 2)
     rows = db.execute(
         select(
@@ -465,7 +608,7 @@ def _general_region_health(
             func.sum(case((MarketSourceRun.status == "ERROR", 1), else_=0)),
         )
         .where(
-            MarketSourceRun.source_lane == "official_general_chart",
+            MarketSourceRun.source_lane == source_lane,
             MarketSourceRun.region.in_(regions),
             MarketSourceRun.started_at >= now - timedelta(days=7),
         )
@@ -510,6 +653,7 @@ def list_general_video_trends(
     max_age_hours: int | None = Query(default=None, ge=0),
     min_views: int = Query(default=0, ge=0),
     min_engagement: int = Query(default=0, ge=0),
+    shorts_only: bool = Query(default=False),
     sort: str = Query(default="rank", pattern="^(rank|rank_gain|views|velocity|engagement|region_breadth|streak|new_entries)$"),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -527,17 +671,24 @@ def list_general_video_trends(
     # "0" is YouTube's own all-categories sentinel, not a real category id.
     # Treating it as a filter silently emptied the chart.
     selected_category = category if category and category != "0" else None
+    # Surface-first projection: an official general-chart result remains
+    # visible as general inventory unless a dedicated Shorts verifier has
+    # positively classified the same video as a Short. This also backfills
+    # legacy short-duration landscape rows that used to be stranded in
+    # SHORT_DURATION_CANDIDATE.
+    general_statuses = ("REJECTED_NOT_SHORTS", "SHORT_DURATION_CANDIDATE", "UNVERIFIED", "VERIFY_FAILED")
+    source_lane_filter = None if shorts_only else "official_general_chart"
+    trend_source = "Verified YouTube Shorts" if shorts_only else "Official YouTube popular chart"
+    conditions = [
+        MarketVideoObservation.observed_at >= cutoff,
+        MarketVideo.shorts_status == "VERIFIED_SHORTS" if shorts_only else MarketVideo.shorts_status.in_(general_statuses),
+    ]
+    if source_lane_filter:
+        conditions.insert(0, MarketVideoObservation.source_lane == source_lane_filter)
     rows = db.execute(
         select(MarketVideo, MarketVideoObservation)
         .join(MarketVideoObservation, MarketVideoObservation.market_video_id == MarketVideo.id)
-        .where(
-            MarketVideoObservation.source_lane == "official_general_chart",
-            MarketVideoObservation.observed_at >= cutoff,
-            # General Video Trends is a long-form sibling, not a second
-            # pathway for uncertain Shorts. A row only appears after the
-            # strict Shorts verifier has ruled it out (duration or landscape).
-            MarketVideo.shorts_status == "REJECTED_NOT_SHORTS",
-        )
+        .where(*conditions)
         .order_by(desc(MarketVideoObservation.observed_at))
     ).all()
 
@@ -625,13 +776,13 @@ def list_general_video_trends(
             "region_count": len(item["regions"]),
             "observed_days": len(days),
             "last_observed_at": latest.observed_at.isoformat(),
-            "source": "Official YouTube popular chart",
-            "format": "non_shorts",
+            "source": trend_source,
+            "format": "shorts" if shorts_only else "non_shorts",
         })
     sort_keys = {
         "rank": lambda item: (item["rank"] is None, item["rank"] or 9999),
         "rank_gain": lambda item: (-(item["rank_change"] or 0), item["rank"] is None, item["rank"] or 9999),
-        "views": lambda item: -item["velocity_per_day"],
+        "views": lambda item: -item["view_count"],
         "velocity": lambda item: -item["velocity_per_day"],
         "engagement": lambda item: -item["engagement"],
         "region_breadth": lambda item: (-item["region_count"], item["rank"] is None, item["rank"] or 9999),
@@ -639,6 +790,9 @@ def list_general_video_trends(
         "new_entries": lambda item: (item["observed_days"] != 1, item["observed_days"], item["last_observed_at"] is None, item["last_observed_at"] or ""),
     }
     items.sort(key=sort_keys[sort])
+    for index, item in enumerate(items, start=1):
+        item["global_internal_rank"] = index
+        item["regional_rank"] = item["rank"]
     status = SeedStore().status()
     tracked_regions = sorted({region for item in items for region in item["tracked_regions"]})
     total = len(items)
@@ -675,8 +829,263 @@ def list_general_video_trends(
             "last_scan_at": status.get("general_video_chart_last_scan_at"),
             "state": status.get("general_video_chart_state", "waiting"),
         },
-        "methodology": "General-video market chart from YouTube's official regional mostPopular endpoint. The dedicated collector rotates through up to 110 YouTube-supported regions and is deliberately isolated from Early Topic Signals and Shorts Trending Topics. 'Observed days' counts this system's chart observations, not an official YouTube-wide streak.",
+        "methodology": (
+            "Verified Shorts only: duration <=3 minutes plus vertical or square video metadata. "
+            "These rows are observed market evidence, not yet semantic topic clusters."
+            if shorts_only
+            else "General-video market chart from YouTube's official regional mostPopular endpoint. The dedicated collector rotates through up to 110 YouTube-supported regions and is deliberately isolated from Early Topic Signals and Shorts Trending Topics. 'Observed days' counts this system's chart observations, not an official YouTube-wide streak."
+        ),
     }
+
+
+@api_router.get("/youtube/general-trends")
+def list_innertube_general_trends(
+    region: str | None = Query(default=None, min_length=2, max_length=2),
+    period_days: int = Query(default=7, ge=1, le=30),
+    category: str | None = Query(default=None, max_length=16),
+    min_duration_seconds: int | None = Query(default=None, ge=0),
+    max_duration_seconds: int | None = Query(default=None, ge=0),
+    min_age_hours: int | None = Query(default=None, ge=0),
+    max_age_hours: int | None = Query(default=None, ge=0),
+    min_views: int = Query(default=0, ge=0),
+    min_engagement: int = Query(default=0, ge=0),
+    sort: str = Query(default="rank", pattern="^(rank|rank_gain|views|velocity|engagement|region_breadth|streak|new_entries)$"),
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    """InnerTube-based general-video discovery, isolated from Shorts lanes."""
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=period_days)
+    selected_region = region.upper() if region else None
+    selected_category = category if category and category != "0" else None
+    source_lanes = ("innertube_general_browse", "innertube_general_search")
+    lane_priority = {lane: index for index, lane in enumerate(source_lanes)}
+    trend_source = "InnerTube browse/search general discovery"
+    conditions = [
+        MarketVideoObservation.observed_at >= cutoff,
+        MarketVideo.shorts_status.in_(("REJECTED_NOT_SHORTS", "SHORT_DURATION_CANDIDATE", "UNVERIFIED", "VERIFY_FAILED")),
+        MarketVideoObservation.source_lane.in_(source_lanes),
+    ]
+    rows = db.execute(
+        select(MarketVideo, MarketVideoObservation)
+        .join(MarketVideoObservation, MarketVideoObservation.market_video_id == MarketVideo.id)
+        .where(*conditions)
+        .order_by(desc(MarketVideoObservation.observed_at))
+    ).all()
+
+    # Keep the page useful during a transient InnerTube/Docker DNS outage.
+    # This remains explicitly labelled official-chart data and does not alter
+    # the provenance of any observation.
+    if not rows:
+        fallback = list_general_video_trends(
+            region=region, period_days=period_days, category=category,
+            min_duration_seconds=min_duration_seconds, max_duration_seconds=max_duration_seconds,
+            min_age_hours=min_age_hours, max_age_hours=max_age_hours,
+            min_views=min_views, min_engagement=min_engagement,
+            shorts_only=False, sort=sort, limit=limit, offset=offset, db=db,
+        )
+        status = SeedStore().status()
+        latest_innertube_run = db.scalar(
+            select(MarketSourceRun)
+            .where(MarketSourceRun.source_lane.in_(source_lanes))
+            .order_by(desc(MarketSourceRun.started_at))
+        )
+        persisted_error = str((latest_innertube_run.details or {}).get("error") or "")[:280] if latest_innertube_run else ""
+        fallback["data_mode"] = "official_chart_fallback"
+        fallback["inner_tube_coverage"] = {
+            "state": status.get("youtube_general_innertube_state", "waiting"),
+            "last_scan_at": status.get("youtube_general_innertube_last_scan_at"),
+            "last_success_at": status.get("youtube_general_innertube_last_success_at"),
+            "last_error_type": status.get("youtube_general_innertube_last_error_type") or (latest_innertube_run.error_type if latest_innertube_run else None),
+            "last_error": status.get("youtube_general_innertube_last_error") or persisted_error or None,
+        }
+        fallback["methodology"] = (
+            "InnerTube browse sedang tidak menghasilkan data, jadi halaman memakai cache chart resmi YouTube yang sudah tersimpan. "
+            "Fallback ini diberi label dan tidak dihitung sebagai hasil InnerTube. " + fallback["methodology"]
+        )
+        return fallback
+
+    grouped: dict[int, dict] = {}
+    for video, observation in rows:
+        if selected_region and observation.region != selected_region:
+            continue
+        item = grouped.setdefault(video.id, {"video": video, "observations": [], "regions": set()})
+        item["observations"].append(observation)
+        if observation.region:
+            item["regions"].add(observation.region)
+
+    items = []
+    for item in grouped.values():
+        observations = item["observations"]
+        by_scan: dict[tuple[datetime, str | None], MarketVideoObservation] = {}
+        for observation in observations:
+            key = (observation.observed_at, observation.region)
+            current = by_scan.get(key)
+            current_priority = lane_priority.get(current.source_lane, len(source_lanes)) if current else len(source_lanes)
+            new_priority = lane_priority.get(observation.source_lane, len(source_lanes))
+            if current is None or new_priority < current_priority or (new_priority == current_priority and (observation.source_rank or 9999) < (current.source_rank or 9999)):
+                by_scan[key] = observation
+        scans = sorted(by_scan.values(), key=lambda value: value.observed_at, reverse=True)
+        if not scans:
+            continue
+        latest = scans[0]
+        same_region_scans = [scan for scan in scans if scan.region == latest.region]
+        previous = same_region_scans[1] if len(same_region_scans) > 1 else None
+        video = item["video"]
+        days = {scan.observed_at.date().isoformat() for scan in scans}
+        latest_rank = latest.source_rank
+        rank_change = None
+        if latest_rank is not None and previous and previous.source_rank is not None:
+            rank_change = previous.source_rank - latest_rank
+        duration_seconds = _duration_seconds(video.duration_iso8601)
+        age_hours = ((now - video.published_at).total_seconds() / 3600) if video.published_at else None
+        engagement = (latest.like_count or 0) + (latest.comment_count or 0)
+        if selected_category and video.category_id != selected_category:
+            continue
+        if min_duration_seconds is not None and duration_seconds < min_duration_seconds:
+            continue
+        if max_duration_seconds is not None and duration_seconds > max_duration_seconds:
+            continue
+        if min_age_hours is not None and (age_hours is None or age_hours < min_age_hours):
+            continue
+        if max_age_hours is not None and (age_hours is None or age_hours > max_age_hours):
+            continue
+        if latest.view_count < min_views or engagement < min_engagement:
+            continue
+        oldest = same_region_scans[-1] if same_region_scans else latest
+        views_gained = latest.view_count - (oldest.view_count or 0)
+        observation_span_hours = (latest.observed_at - oldest.observed_at).total_seconds() / 3600
+        elapsed_days = max(observation_span_hours / 24, 1 / 24)
+        velocity_per_day = views_gained / elapsed_days
+        items.append({
+            "video_id": video.video_id,
+            "title": video.title,
+            "channel_title": video.channel_title,
+            "video_url": video.video_url,
+            "thumbnail_url": video.thumbnail_url,
+            "published_at": video.published_at.isoformat() if video.published_at else None,
+            "duration": _duration_label(video.duration_iso8601),
+            "view_count": latest.view_count,
+            "views_gained": views_gained,
+            "velocity_per_day": round(velocity_per_day),
+            "velocity_per_hour": round(velocity_per_day / 24),
+            "observation_span_hours": round(observation_span_hours, 2),
+            "observation_count": len(same_region_scans),
+            "like_count": latest.like_count,
+            "comment_count": latest.comment_count,
+            "engagement": engagement,
+            "duration_seconds": duration_seconds,
+            "age_hours": round(age_hours, 2) if age_hours is not None else None,
+            "rank": latest_rank,
+            "rank_change": rank_change,
+            "tracked_regions": sorted(item["regions"]),
+            "region_count": len(item["regions"]),
+            "observed_days": len(days),
+            "last_observed_at": latest.observed_at.isoformat(),
+            "source": trend_source,
+            "format": "video",
+        })
+    sort_keys = {
+        "rank": lambda item: (item["rank"] is None, item["rank"] or 9999),
+        "rank_gain": lambda item: (-(item["rank_change"] or 0), item["rank"] is None, item["rank"] or 9999),
+        "views": lambda item: -item["view_count"],
+        "velocity": lambda item: -item["velocity_per_day"],
+        "engagement": lambda item: -item["engagement"],
+        "region_breadth": lambda item: (-item["region_count"], item["rank"] is None, item["rank"] or 9999),
+        "streak": lambda item: (-item["observed_days"], item["rank"] is None, item["rank"] or 9999),
+        "new_entries": lambda item: (item["observed_days"] != 1, item["observed_days"], item["last_observed_at"] is None, item["last_observed_at"] or ""),
+    }
+    items.sort(key=sort_keys[sort])
+    for index, item in enumerate(items, start=1):
+        item["global_internal_rank"] = index
+        item["regional_rank"] = item["rank"]
+    status = SeedStore().status()
+    tracked_regions = sorted({region for item in items for region in item["tracked_regions"]})
+    total = len(items)
+    page = items[offset : offset + limit]
+    return {
+        "items": page,
+        "tracked_regions": tracked_regions,
+        "region_health": _general_region_health(
+            db,
+            tracked_regions,
+            now=now,
+            source_lane="innertube_general_browse",
+            target_regions=settings.youtube_general_innertube_target_regions,
+            regions_per_run=settings.youtube_general_innertube_regions_per_run,
+            interval_minutes=settings.youtube_general_innertube_interval_minutes,
+        ),
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "returned": len(page),
+            "has_more": offset + len(page) < total,
+        },
+        "period_days": period_days,
+        "filters": {
+            "region": selected_region,
+            "category": selected_category,
+            "min_duration_seconds": min_duration_seconds,
+            "max_duration_seconds": max_duration_seconds,
+            "min_age_hours": min_age_hours,
+            "max_age_hours": max_age_hours,
+            "min_views": min_views,
+            "min_engagement": min_engagement,
+            "sort": sort,
+            "offset": offset,
+            "limit": limit,
+        },
+        "coverage": {
+            "target_regions": int(status.get("youtube_general_innertube_target_regions", settings.youtube_general_innertube_target_regions)),
+            "catalog_regions": int(status.get("youtube_general_innertube_catalog_regions", 0)),
+            "estimated_cycle_minutes": int(status.get("youtube_general_innertube_estimated_cycle_minutes", 0)),
+            "last_scan_at": status.get("youtube_general_innertube_last_scan_at"),
+            "last_success_at": status.get("youtube_general_innertube_last_success_at"),
+            "state": status.get("youtube_general_innertube_state", "waiting"),
+            "last_error_type": status.get("youtube_general_innertube_last_error_type"),
+            "last_error": status.get("youtube_general_innertube_last_error"),
+        },
+        "methodology": (
+            "Penelusuran video umum melalui surface browse/search YouTube. Semua hasil general tetap digunakan, termasuk video landscape berdurasi pendek. Video hanya dipindahkan ke halaman Shorts setelah sumber Shorts memverifikasi formatnya. Jumlah hari dan pertumbuhan dihitung dari pengamatan sistem ini, bukan angka global resmi YouTube."
+        ),
+    }
+
+
+@api_router.get("/youtube/shorts-trends")
+def list_shorts_video_trends(
+    region: str | None = Query(default=None, min_length=2, max_length=2),
+    period_days: int = Query(default=7, ge=1, le=30),
+    category: str | None = Query(default=None, max_length=16),
+    min_duration_seconds: int | None = Query(default=None, ge=0),
+    max_duration_seconds: int | None = Query(default=None, ge=0),
+    min_age_hours: int | None = Query(default=None, ge=0),
+    max_age_hours: int | None = Query(default=None, ge=0),
+    min_views: int = Query(default=0, ge=0),
+    min_engagement: int = Query(default=0, ge=0),
+    sort: str = Query(default="rank", pattern="^(rank|rank_gain|views|velocity|engagement|region_breadth|streak|new_entries)$"),
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Shorts-only market chart with the same ranking logic as video trends."""
+    return list_general_video_trends(
+        region=region,
+        period_days=period_days,
+        category=category,
+        min_duration_seconds=min_duration_seconds,
+        max_duration_seconds=max_duration_seconds,
+        min_age_hours=min_age_hours,
+        max_age_hours=max_age_hours,
+        min_views=min_views,
+        min_engagement=min_engagement,
+        shorts_only=True,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+        db=db,
+    )
 
 
 
@@ -696,6 +1105,29 @@ def video_trend_history(
         .order_by(desc(MarketVideoObservation.observed_at))
         .limit(limit)
     ).all()
+    latest_observation = observations[0] if observations else None
+    latest_view_count = latest_observation.view_count if latest_observation else 0
+    same_region_observations = (
+        [obs for obs in observations if latest_observation and obs.region == latest_observation.region]
+        if latest_observation
+        else observations
+    )
+    if same_region_observations:
+        same_region_sorted = sorted(same_region_observations, key=lambda item: item.observed_at)
+        oldest_same_region = same_region_sorted[0]
+        newest_same_region = same_region_sorted[-1]
+        observation_span_hours = max((newest_same_region.observed_at - oldest_same_region.observed_at).total_seconds() / 3600, 1 / 24)
+        views_gained = newest_same_region.view_count - (oldest_same_region.view_count or 0)
+        velocity_per_day = views_gained / max(observation_span_hours / 24, 1 / 24)
+        rank = newest_same_region.source_rank
+        previous_rank = same_region_sorted[-2].source_rank if len(same_region_sorted) > 1 else None
+        rank_change = previous_rank - rank if previous_rank is not None and rank is not None else None
+    else:
+        observation_span_hours = 0.0
+        views_gained = 0
+        velocity_per_day = 0.0
+        rank = None
+        rank_change = None
     rows = []
     for obs in observations:
         rows.append({
@@ -717,18 +1149,27 @@ def video_trend_history(
             "video_url": video.video_url,
             "duration": _duration_label(video.duration_iso8601),
             "published_at": video.published_at.isoformat() if video.published_at else None,
-            "view_count": video.view_count,
-            "rank": video.rank,
-            "rank_change": video.rank_change,
-            "velocity_per_hour": video.velocity_per_hour,
-            "velocity_per_day": video.velocity_per_day,
+            "view_count": latest_view_count,
+            "rank": rank,
+            "rank_change": rank_change,
+            "velocity_per_hour": round(velocity_per_day / 24),
+            "velocity_per_day": round(velocity_per_day),
             "tracked_regions": sorted({obs.region for obs in observations if obs.region}),
             "region_count": len({obs.region for obs in observations if obs.region}),
             "observed_days": len({obs.observed_at.date().isoformat() for obs in observations if obs.observed_at}),
-            "last_observed_at": observations[0].observed_at.isoformat() if observations and observations[0].observed_at else None,
+            "last_observed_at": latest_observation.observed_at.isoformat() if latest_observation and latest_observation.observed_at else None,
         },
         "observations": rows,
     }
+
+
+@api_router.get("/youtube/shorts-trends/{video_id}/history")
+def shorts_video_trend_history(
+    video_id: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict:
+    return video_trend_history(video_id=video_id, limit=limit, db=db)
 
 
 
@@ -1041,7 +1482,20 @@ def list_market_topics(db: Session = Depends(get_db)) -> dict:
     rows = []
     private_candidate_count = 0
     provisional_count = 0
-    for topic in db.scalars(select(MarketTopic).order_by(desc(MarketTopic.trend_score), desc(MarketTopic.observed_views))).all():
+    # Do not walk tens of thousands of historical singleton rows and execute
+    # one membership query for every row.  Only multi-video, multi-channel
+    # candidates can ever be useful to this endpoint.
+    candidate_topics = db.scalars(
+        select(MarketTopic)
+        .where(
+            MarketTopic.member_count >= 2,
+            MarketTopic.channel_count >= 2,
+            MarketTopic.status.in_(("PROVISIONAL",) + PUBLIC_TREND_STATUSES),
+        )
+        .order_by(desc(MarketTopic.trend_score), desc(MarketTopic.observed_views))
+        .limit(250)
+    ).all()
+    for topic in candidate_topics:
         members = db.scalars(
             select(MarketVideo)
             .join(MarketTopicMembership, MarketTopicMembership.market_video_id == MarketVideo.id)
@@ -1087,18 +1541,42 @@ def list_market_topics(db: Session = Depends(get_db)) -> dict:
 
 
 @api_router.get("/youtube/market/topics/{topic_id}")
-def get_market_topic(topic_id: int, db: Session = Depends(get_db)) -> dict:
-    """One topic's auditable momentum history and its underlying Shorts."""
+def get_market_topic(
+    topic_id: int,
+    scope: str = Query(default="combined", pattern="^(shorts|videos|combined)$"),
+    period: str = Query(default="7d", pattern="^(today|7d|30d)$"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """One Topic Pool cluster with evidence filtered by media and period."""
     topic = db.get(MarketTopic, topic_id)
     if not topic or topic.status == "PRIVATE_CANDIDATE":
         raise HTTPException(status_code=404, detail="Public Market Topic not found")
+    allowed_statuses = {
+        "shorts": {"VERIFIED_SHORTS"},
+        "videos": {"REJECTED_NOT_SHORTS"},
+        "combined": {"VERIFIED_SHORTS", "REJECTED_NOT_SHORTS"},
+    }[scope]
+    cutoff = datetime.now(UTC) - timedelta(hours={"today": 24, "7d": 168, "30d": 720}[period])
     members = db.scalars(
         select(MarketVideo)
         .join(MarketTopicMembership, MarketTopicMembership.market_video_id == MarketVideo.id)
-        .where(MarketTopicMembership.market_topic_id == topic.id)
+        .join(MarketVideoObservation, MarketVideoObservation.market_video_id == MarketVideo.id)
+        .where(
+            MarketTopicMembership.market_topic_id == topic.id,
+            MarketVideo.shorts_status.in_(allowed_statuses),
+            MarketVideoObservation.observed_at >= cutoff,
+        )
+        .distinct()
     ).all()
+    if not members:
+        raise HTTPException(status_code=404, detail="No evidence matches this Topic Pool filter")
+    member_ids = {video.id for video in members}
     latest_observations: dict[int, MarketVideoObservation] = {}
-    for observation in db.scalars(select(MarketVideoObservation).order_by(desc(MarketVideoObservation.observed_at))).all():
+    for observation in db.scalars(
+        select(MarketVideoObservation)
+        .where(MarketVideoObservation.market_video_id.in_(member_ids), MarketVideoObservation.observed_at >= cutoff)
+        .order_by(desc(MarketVideoObservation.observed_at))
+    ).all():
         latest_observations.setdefault(observation.market_video_id, observation)
     source_mix: dict[str, int] = {}
     region_mix: dict[str, int] = {}
@@ -1128,6 +1606,8 @@ def get_market_topic(topic_id: int, db: Session = Depends(get_db)) -> dict:
         "acceleration": topic.acceleration,
         "member_count": topic.member_count,
         "channel_count": topic.channel_count,
+        "scope": scope,
+        "period": period,
         "last_observed_at": (topic.last_observed_at or last_source_observed_at).isoformat() if (topic.last_observed_at or last_source_observed_at) else None,
         "source_mix": source_mix,
         "region_mix": region_mix,
@@ -1137,7 +1617,7 @@ def get_market_topic(topic_id: int, db: Session = Depends(get_db)) -> dict:
             "video_url": video.video_url, "thumbnail_url": video.thumbnail_url,
             "view_count": latest_observations.get(video.id).view_count if latest_observations.get(video.id) else 0,
         } for video in sorted(members, key=lambda item: latest_observations.get(item.id).view_count if latest_observations.get(item.id) else 0, reverse=True)],
-        "methodology": "Evidence cards are verified Shorts in this topic. Momentum is derived from repeated observed public-source measurements, not a YouTube-wide total. Source and region counts show only the coverage observed by this system.",
+        "methodology": "Evidence cards match the selected Topic Pool media and time filters. Momentum is derived from repeated observations of the same videos, not lifetime views introduced by newly discovered evidence and not a YouTube-wide total.",
     }
 
 
@@ -1303,6 +1783,264 @@ def list_youtube_trends(
         "private_candidate_count": private_candidate_count,
         "methodology": "Only clusters with independent cross-channel evidence are shown. Views and velocity are observed within this system, not YouTube-wide totals.",
     }
+
+
+def _period_growth_views(snapshots_desc: list, cutoff: datetime) -> int:
+    """Views gained inside a period, from topic snapshots (newest-first)."""
+    if not snapshots_desc:
+        return 0
+    ascending = list(reversed(snapshots_desc))
+    latest = ascending[-1].observed_views or 0
+    baseline = next((s.observed_views or 0 for s in ascending if s.observed_at >= cutoff), ascending[0].observed_views or 0)
+    return max(0, latest - baseline)
+
+
+@api_router.get("/youtube/topic-pool")
+def list_youtube_topic_pool(
+    limit: int = Query(default=40, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None, max_length=120),
+    scope: str = Query(default="combined", pattern="^(shorts|videos|combined)$"),
+    period: str = Query(default="7d", pattern="^(today|7d|30d)$"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """A broader, less strict view of observed topic clusters.
+
+    This endpoint is intentionally separate from the public leaderboard so the
+    main trends page can stay strict while a companion page surfaces weaker but
+    useful candidates for exploration and debugging.
+    """
+    cluster_conditions = [
+        TrendCluster.status != "MERGED",
+        TrendCluster.member_count >= 2,
+        TrendCluster.channel_count >= 2,
+    ]
+    market_conditions = [
+        MarketTopic.member_count >= 2,
+        MarketTopic.channel_count >= 2,
+        MarketTopic.status.in_(PUBLIC_TREND_STATUSES),
+        ~MarketTopic.label.ilike("%title-overlap candidate%"),
+    ]
+    search = q.strip() if q and q.strip() else None
+    if search:
+        like = f"%{search}%"
+        cluster_conditions.append(TrendCluster.label.ilike(like))
+        market_conditions.append(MarketTopic.label.ilike(like))
+
+    # Media scope: early-signal clusters are Shorts by definition. Broad market
+    # topics qualify only when they have at least one member of the chosen type.
+    if scope == "shorts":
+        market_conditions.append(
+            exists().where(
+                MarketTopicMembership.market_topic_id == MarketTopic.id,
+                MarketTopicMembership.market_video_id == MarketVideo.id,
+                MarketVideo.shorts_status == "VERIFIED_SHORTS",
+            )
+        )
+    elif scope == "videos":
+        market_conditions.append(
+            exists().where(
+                MarketTopicMembership.market_topic_id == MarketTopic.id,
+                MarketTopicMembership.market_video_id == MarketVideo.id,
+                MarketVideo.shorts_status == "REJECTED_NOT_SHORTS",
+            )
+        )
+
+    period_cutoff = datetime.now(UTC) - timedelta(hours={"today": 24, "7d": 168, "30d": 720}[period])
+
+    # Top-K merge pagination: fetch only offset+limit per source ordered by the
+    # same key used for the final merge, then merge-sort and slice. Any row in
+    # the overall top-(offset+limit) must be inside its own source top-K, so
+    # this is exact without loading every row.
+    window = offset + limit
+    clusters = [] if scope == "videos" else db.scalars(
+        select(TrendCluster)
+        .where(*cluster_conditions)
+        .order_by(desc(TrendCluster.trend_score), desc(TrendCluster.member_count))
+        .limit(window)
+    ).all()
+    market_topics = db.scalars(
+        select(MarketTopic)
+        .where(*market_conditions)
+        .order_by(desc(MarketTopic.trend_score), desc(MarketTopic.member_count))
+        .limit(window)
+    ).all()
+
+    combined = [
+        ("signal", cluster, float(cluster.trend_score or 0), int(cluster.member_count or 0))
+        for cluster in clusters
+    ] + [
+        ("market", topic, float(topic.trend_score or 0), int(topic.member_count or 0))
+        for topic in market_topics
+    ]
+    combined.sort(key=lambda row: (row[2], row[3]), reverse=True)
+    selected = combined[offset:offset + limit]
+
+    total_items = (
+        (0 if scope == "videos" else db.scalar(select(func.count(TrendCluster.id)).where(*cluster_conditions)) or 0)
+    ) + (
+        db.scalar(select(func.count(MarketTopic.id)).where(*market_conditions)) or 0
+    )
+
+    # Diagnostics stay a health summary, independent of search and pagination.
+    status_counts = dict(
+        db.execute(
+            select(TrendCluster.status, func.count(TrendCluster.id))
+            .where(TrendCluster.status != "MERGED")
+            .group_by(TrendCluster.status)
+        ).all()
+    )
+    public_count = sum(status_counts.get(status, 0) for status in PUBLIC_TREND_STATUSES)
+    candidate_count = status_counts.get("PRIVATE_CANDIDATE", 0)
+    reviewable_count = db.scalar(
+        select(func.count(TrendCluster.id)).where(
+            TrendCluster.status != "MERGED",
+            TrendCluster.member_count >= 2,
+            TrendCluster.channel_count >= 2,
+        )
+    ) or 0
+    market_multi_video_topics = db.scalar(
+        select(func.count(MarketTopic.id)).where(
+            MarketTopic.member_count >= 2,
+            MarketTopic.channel_count >= 2,
+            MarketTopic.status.in_(PUBLIC_TREND_STATUSES),
+            ~MarketTopic.label.ilike("%title-overlap candidate%"),
+        )
+    ) or 0
+
+    # Pipeline diagnostics for ordinary (non-Short) videos: stored, fingerprinted,
+    # semantically understood, clustered, and still waiting for the AI.
+    stored_scope_videos = db.scalar(
+        select(func.count(MarketVideo.id)).where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+    ) or 0
+    featured_scope_videos = db.scalar(
+        select(func.count(MarketVideoFeature.id))
+        .join(MarketVideo, MarketVideo.id == MarketVideoFeature.market_video_id)
+        .where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+    ) or 0
+    semantic_scope_videos = db.scalar(
+        select(func.count(MarketVideoFeature.id))
+        .join(MarketVideo, MarketVideo.id == MarketVideoFeature.market_video_id)
+        .where(
+            MarketVideo.shorts_status == "REJECTED_NOT_SHORTS",
+            MarketVideoFeature.feature_model == "market-semantic-v6",
+        )
+    ) or 0
+    clustered_scope_videos = db.scalar(
+        select(func.count(MarketTopicMembership.market_video_id.distinct()))
+        .join(MarketVideo, MarketVideo.id == MarketTopicMembership.market_video_id)
+        .where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+    ) or 0
+    pending_semantic_videos = max(0, stored_scope_videos - semantic_scope_videos)
+
+    # Batch-load members and snapshots for the selected slice so a page runs a
+    # fixed number of queries instead of one round-trip per topic.
+    signal_ids = [row.id for source_type, row, _velocity, _members in selected if source_type == "signal"]
+    market_ids = [row.id for source_type, row, _velocity, _members in selected if source_type == "market"]
+
+    signal_members = {}
+    signal_snapshots = {}
+    if signal_ids:
+        for snipe, membership in db.execute(
+            select(YoutubeSnipe, TrendMembership)
+            .join(TrendMembership, TrendMembership.youtube_snipe_id == YoutubeSnipe.id)
+            .where(TrendMembership.cluster_id.in_(signal_ids))
+            .order_by(desc(YoutubeSnipe.velocity_per_hour))
+        ).all():
+            signal_members.setdefault(membership.cluster_id, []).append((snipe, membership))
+        for snapshot in db.scalars(
+            select(TrendSnapshot)
+            .where(TrendSnapshot.cluster_id.in_(signal_ids))
+            .order_by(desc(TrendSnapshot.observed_at))
+        ).all():
+            signal_snapshots.setdefault(snapshot.cluster_id, []).append(snapshot)
+
+    market_members = {}
+    market_snapshots = {}
+    if market_ids:
+        for video, membership in db.execute(
+            select(MarketVideo, MarketTopicMembership)
+            .join(MarketTopicMembership, MarketTopicMembership.market_video_id == MarketVideo.id)
+            .where(MarketTopicMembership.market_topic_id.in_(market_ids))
+        ).all():
+            market_members.setdefault(membership.market_topic_id, []).append(video)
+        for snapshot in db.scalars(
+            select(MarketTopicSnapshot)
+            .where(MarketTopicSnapshot.market_topic_id.in_(market_ids))
+            .order_by(desc(MarketTopicSnapshot.observed_at))
+        ).all():
+            market_snapshots.setdefault(snapshot.market_topic_id, []).append(snapshot)
+
+    items = []
+    for source_type, row, _velocity, _members in selected:
+        if source_type == "signal":
+            payload = _trend_payload(
+                db, row, member_limit=8, snapshot_limit=10, full_evidence_totals=True,
+                prefetched_members=signal_members.get(row.id, []),
+                prefetched_snapshots=signal_snapshots.get(row.id, []),
+            )
+            payload["detail_href"] = f"/youtube/trends/{row.id}?from=topic-pool"
+            payload["source_type"] = "early_signal"
+            payload["media_mix"] = {"shorts": payload.get("member_count", 0), "videos": 0}
+            payload["ranking_score"] = payload.get("trend_score", 0)
+            payload["period_growth_views"] = _period_growth_views(signal_snapshots.get(row.id, []), period_cutoff)
+            items.append(payload)
+            continue
+        topic = row
+        all_market_members = market_members.get(topic.id, [])
+        media_mix = {
+            "shorts": sum(1 for v in all_market_members if v.shorts_status == "VERIFIED_SHORTS"),
+            "videos": sum(1 for v in all_market_members if v.shorts_status == "REJECTED_NOT_SHORTS"),
+        }
+        members = all_market_members[:8]
+        snapshots = list(reversed(market_snapshots.get(topic.id, [])[:10]))
+        items.append({
+            "id": f"market-{topic.id}",
+            "detail_href": f"/youtube/trends/market/{topic.id}",
+            "source_type": "market_video",
+            "label": topic.label,
+            "niche": None,
+            "status": topic.status,
+            "observed_views": topic.observed_views,
+            "observed_velocity_per_hour": topic.observed_velocity_per_hour,
+            "member_count": topic.member_count,
+            "channel_count": topic.channel_count,
+            "members": [{
+                "video_id": video.video_id,
+                "thumbnail_url": video.thumbnail_url,
+                "current_view_count": None,
+            } for video in members],
+            "snapshots": [{
+                "observed_velocity_per_hour": snapshot.observed_velocity_per_hour,
+            } for snapshot in snapshots],
+            "media_mix": media_mix,
+            "ranking_score": topic.trend_score,
+            "period_growth_views": _period_growth_views(market_snapshots.get(topic.id, []), period_cutoff),
+            "human_summary": None,
+        })
+    return {
+        "items": items,
+        "total_items": total_items,
+        "offset": offset,
+        "limit": limit,
+        "scope": scope,
+        "period": period,
+        "has_more": offset + len(items) < total_items,
+        "diagnostics": {
+            "public_topics": public_count,
+            "candidate_topics": candidate_count,
+            "reviewable_topics": reviewable_count,
+            "market_multi_video_topics": market_multi_video_topics,
+            "status_counts": status_counts,
+            "stored_scope_videos": stored_scope_videos,
+            "featured_scope_videos": featured_scope_videos,
+            "semantic_scope_videos": semantic_scope_videos,
+            "clustered_scope_videos": clustered_scope_videos,
+            "pending_semantic_videos": pending_semantic_videos,
+        },
+        "methodology": "This topic pool combines multi-video candidates from the early-signal and broad-market lanes. Single-video rows remain stored but are not presented as a topic.",
+    }
+
 
 
 @api_router.get("/youtube/early-topics")
