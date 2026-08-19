@@ -74,3 +74,22 @@ The following user-approved decisions supersede older wording in this document:
 5. Every signal is classified by channel context (UNDERDOG / ESTABLISHED /
    PROVEN_WINNER / WHALE) via subscriber count + recent-view history. The
    "0-follower meme coin" claim is only valid for rows classified UNDERDOG.
+6. The active semantic service is an **OpenAI-compatible configurable
+   provider**, not a hard-coded Gemini client. Provider base URL, key, and
+   model come from environment variables. A provider outage must pause AI
+   enrichment without stopping discovery or deleting stored evidence.
+7. Broad video intelligence has two independently labelled sources:
+   **Official YouTube regional charts** (durable fallback) and the optional
+   **InnerTube General Browse** lane (additional discovery coverage). If the
+   latter has a network/source failure, its endpoint may show official-chart
+   fallback data only when `data_mode` clearly says so; it must never pretend
+   that fallback rows came from InnerTube.
+8. Apify is disabled unless explicitly re-enabled by the user. Scheduled
+   collection currently relies on YouTube/InnerTube lanes.
+9. A topic is never a single video. Public/exploratory topic rows require at
+   least two videos from two independent channels. Semantic clustering uses a
+   normalized centroid plus matching theme, recognizable format, or entity +
+   topic type. Generic lexical overlap alone may not merge evidence.
+10. Local frontend development uses exactly one host `next dev` process.
+    Normal startup must not run `next build`, and Docker's frontend service is
+    opt-in so it cannot compete with the host for port 3010 or the Next cache.

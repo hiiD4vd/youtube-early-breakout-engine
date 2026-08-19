@@ -12,12 +12,16 @@ independent for thesis development.
 
    `.\run-all.ps1`
 
+   The normal command does not rebuild images and starts exactly one frontend
+   development server. Use `.\run-all.ps1 -Rebuild` only after changing a
+   Dockerfile or Python dependency.
+
 3. Manual fallback if you want to run things step by step:
 
-   - `docker compose up --build -d`
+   - `docker compose up -d`
    - `docker compose exec -T backend alembic upgrade head`
    - `cd frontend`
-   - `npm run dev:clean`
+   - `npm run dev`
 
 4. Open `http://localhost:3010`; the API health endpoint is `http://localhost:8010/health`.
 
