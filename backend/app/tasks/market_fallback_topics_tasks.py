@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models.market_trends import MarketTopic, MarketTopicMembership, MarketVideo
 from app.services.seed_store import SeedStore
@@ -18,7 +19,7 @@ from app.tasks.celery_app import celery_app
 # evidence, labelled provisional until Gemini confirms its semantic meaning.
 STOP = {"the", "and", "for", "with", "this", "that", "from", "shorts", "short", "youtube", "video", "viral", "fyp", "trending", "funny", "comedy", "sports", "football", "soccer", "bola", "games", "game", "when", "what", "about", "your", "every", "best", "like", "over", "after", "always", "almost", "never", "everyone", "entire", "part", "time", "more", "great", "copyright", "fair", "use", "official", "www", "http", "https", "com", "yang", "dan", "ini", "itu", "dari", "untuk", "saat", "jadi", "orang", "bikin", "malah", "inilah", "punya", "baseball", "speed"}
 LABEL_SUFFIX = " - title-overlap candidate"
-LOCK = "ycgc:youtube:lock:market-title-overlap"
+LOCK = "ycgc:youtube:lock:market-topic-membership-mutation"
 
 
 def _tokens(title: str | None) -> set[str]:
@@ -28,6 +29,8 @@ def _tokens(title: str | None) -> set[str]:
 @celery_app.task(name="app.tasks.market_fallback_topics_tasks.build_title_overlap_candidates")
 def build_title_overlap_candidates() -> dict[str, int]:
     """Create only independently repeated title subjects; no fabricated topic."""
+    if not settings.market_title_overlap_fallback_enabled:
+        return {"created": 0, "assigned": 0, "candidate_terms": 0, "status": "disabled"}
     store = SeedStore()
     if not store.client.set(LOCK, "1", nx=True, ex=280):
         return {"created": 0, "assigned": 0, "candidate_terms": 0}
