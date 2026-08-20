@@ -24,6 +24,16 @@ class TopicClusterFacts(BaseModel):
     followable: bool
 
 
+class TopicClusterGroupFacts(BaseModel):
+    topic_title: str = Field(min_length=4, max_length=160)
+    topic_type: str = Field(min_length=2, max_length=80)
+    summary: str = Field(min_length=8, max_length=400)
+    entities: list[str] = Field(default_factory=list, max_length=12)
+    confidence: float = Field(ge=0, le=1)
+    followable: bool
+    video_indices: list[int] = Field(default_factory=list, max_length=50)
+
+
 class MarketSemanticFacts(BaseModel):
     """Compact, auditable semantic fingerprint for one market Short."""
     topic_label: str = Field(min_length=2, max_length=160)
@@ -110,6 +120,68 @@ Cluster evidence follows:\n""" + evidence
             return TopicClusterFacts.model_validate(json.loads(text))
         except Exception as exc:
             raise RuntimeError("Gemini returned invalid topic JSON") from exc
+
+    def analyze_topic_clusters(self, evidence: str) -> list[TopicClusterGroupFacts]:
+        """Group multiple shorts into semantic topic clusters in one pass."""
+        if not settings.gemini_api_key:
+            raise RuntimeError("GEMINI_API_KEY is not configured")
+        prompt = """You group independently collected YouTube Shorts into semantic topic clusters.
+Return exactly one JSON array. Each element must have:
+- topic_title
+- topic_type
+- summary
+- entities
+- confidence
+- followable
+- video_indices
+
+Rules:
+- Create a cluster whenever 2+ videos share a topic, event, format, or theme.
+- Be INCLUSIVE: if videos share a subject (e.g. animals, sports moment, DIY, prank, mukbang, unboxing, dance trend, meme format), group them.
+- topic_title: short specific label (2-6 words). Name the shared subject, not generic words.
+- topic_type: one of [sports, gaming, music, comedy, dance, food, tech, news, lifestyle, animals, diy, travel, education, other]
+- confidence: 0.0-1.0. Use 0.7+ for clear shared topic, 0.5-0.7 for reasonable grouping, <0.5 if unsure.
+- followable: true if the topic is specific enough to follow, false if too generic.
+- Only return valid integer indices from the evidence list.
+- Leave out videos that truly don't fit anywhere (don't force them).
+- IMPORTANT: prefer creating more clusters with lower confidence over returning few clusters. Better to group loosely than leave everything ungrouped.
+
+Cluster evidence follows:
+""" + evidence
+        response = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent",
+            params={"key": settings.gemini_api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0}},
+            timeout=60,
+        )
+        response.raise_for_status()
+        try:
+            text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            raw = json.loads(text)
+            if not isinstance(raw, list):
+                raise ValueError("expected list")
+            groups: list[TopicClusterGroupFacts] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                entities = item.get("entities")
+                if isinstance(entities, list):
+                    item["entities"] = [entry for entry in entities if isinstance(entry, str) and entry.strip()][:12]
+                indices = item.get("video_indices")
+                if isinstance(indices, list):
+                    item["video_indices"] = [int(idx) for idx in indices if isinstance(idx, int) and idx >= 0][:50]
+                for field, limit in (("topic_title", 160), ("topic_type", 80), ("summary", 400)):
+                    if isinstance(item.get(field), str):
+                        item[field] = item[field][:limit]
+                try:
+                    item["confidence"] = max(0.0, min(1.0, float(item.get("confidence") or 0)))
+                except (TypeError, ValueError):
+                    item["confidence"] = 0.0
+                item["followable"] = bool(item.get("followable"))
+                groups.append(TopicClusterGroupFacts.model_validate(item))
+            return groups
+        except Exception as exc:
+            raise RuntimeError("Gemini returned invalid topic grouping JSON") from exc
 
     def same_topic(self, early_label: str, market_label: str) -> tuple[bool, float]:
         """Bounded semantic comparison used only for delayed evaluation."""

@@ -1,9 +1,9 @@
-"""Automatic, versioned feature generation for verified Market Shorts."""
+"""Automatic, versioned feature generation for Topic Pool market videos."""
 import re
 from collections import Counter
 from hashlib import sha256
-from datetime import UTC, datetime
-from sqlalchemy import select
+from datetime import UTC, datetime, timedelta
+from sqlalchemy import and_, or_, select
 from app.database import SessionLocal
 from app.models.market_trends import MarketVideo, MarketVideoFeature
 from app.services.seed_store import SeedStore
@@ -27,27 +27,61 @@ def _payload(video: MarketVideo):
     hint = " · ".join(key.title() for key, _ in counts.most_common(3)) or "Unlabeled Shorts pattern"
     return text[:12000], vector, hint, sha256(text.encode()).hexdigest()
 
+def build_market_video_features_for_db(db):
+    """Create the shared semantic intake for Shorts and ordinary videos.
+
+    Kept callable outside Celery so a missed historical lane can be backfilled
+    without waiting for a worker process to be restarted.
+    """
+    created=updated=0
+    # Topic Pool has three independent views over one semantic corpus:
+    # verified Shorts, confirmed ordinary videos, and both combined.
+    # Ordinary videos are bounded to 30 days so old chart history does not
+    # monopolise semantic enrichment capacity.
+    ordinary_cutoff = datetime.now(UTC) - timedelta(days=30)
+    videos=db.scalars(
+        select(MarketVideo).where(
+            or_(
+                MarketVideo.shorts_status == "VERIFIED_SHORTS",
+                and_(
+                    MarketVideo.shorts_status == "REJECTED_NOT_SHORTS",
+                    MarketVideo.published_at.is_not(None),
+                    MarketVideo.published_at >= ordinary_cutoff,
+                )
+            )
+        )
+    ).all()
+    existing={item.market_video_id:item for item in db.scalars(select(MarketVideoFeature)).all()}
+    for video in videos:
+        text, vector, hint, digest=_payload(video); feature=existing.get(video.id)
+        media_type = "shorts" if video.shorts_status == "VERIFIED_SHORTS" else "video"
+        provenance={"content_hash":digest,"source":f"topic_pool_{media_type}","media_type":media_type,"fingerprint_version":FINGERPRINT_VERSION,"generated_at":datetime.now(UTC).isoformat()}
+        if feature and (feature.provenance or {}).get("content_hash")==digest and (feature.provenance or {}).get("fingerprint_version")==FINGERPRINT_VERSION: continue
+        if not feature:
+            feature=MarketVideoFeature(market_video_id=video.id,feature_model="market-lexical-v2",normalized_text=text,sparse_vector=vector,topic_hint=hint,confidence=.25,provenance=provenance); db.add(feature); created+=1
+        else:
+            previous = feature.provenance or {}
+            previous_semantic = previous.get("semantic")
+            feature.normalized_text, feature.sparse_vector = text, vector
+            feature.provenance = {
+                **provenance,
+                **({"previous_semantic": previous_semantic} if isinstance(previous_semantic, dict) else {}),
+                "semantic_invalidated": bool(previous_semantic),
+            }
+            feature.feature_model, feature.topic_hint, feature.confidence = "market-lexical-v2", hint, .25
+            updated+=1
+    db.commit()
+    return {"created":created,"updated":updated,"eligible":len(videos)}
+
+
 @celery_app.task(name="app.tasks.market_feature_tasks.build_market_video_features")
 def build_market_video_features():
     store = SeedStore()
     if not store.client.set(LOCK, "1", nx=True, ex=280): return {"status":"skipped_locked"}
-    created=updated=0
     try:
         with SessionLocal() as db:
-            videos=db.scalars(select(MarketVideo).where(MarketVideo.shorts_status=="VERIFIED_SHORTS")).all()
-            existing={item.market_video_id:item for item in db.scalars(select(MarketVideoFeature)).all()}
-            for video in videos:
-                text, vector, hint, digest=_payload(video); feature=existing.get(video.id)
-                provenance={"content_hash":digest,"source":"verified_shorts","fingerprint_version":FINGERPRINT_VERSION,"generated_at":datetime.now(UTC).isoformat()}
-                if feature and (feature.provenance or {}).get("content_hash")==digest and (feature.provenance or {}).get("fingerprint_version")==FINGERPRINT_VERSION: continue
-                if not feature:
-                    feature=MarketVideoFeature(market_video_id=video.id,feature_model="market-lexical-v1",normalized_text=text,sparse_vector=vector,topic_hint=hint,confidence=.25,provenance=provenance); db.add(feature); created+=1
-                else:
-                    feature.normalized_text,feature.sparse_vector,feature.provenance=text,vector,provenance
-                    if feature.feature_model != "market-gemini-v1":
-                        feature.feature_model, feature.topic_hint = "market-lexical-v2", hint
-                    updated+=1
-            db.commit()
+            result = build_market_video_features_for_db(db)
+        created, updated = result["created"], result["updated"]
         store.set_status(market_features_last_run_at=datetime.now(UTC).isoformat(),market_features_created=created,market_features_updated=updated)
-        return {"created":created,"updated":updated}
+        return result
     finally: store.client.delete(LOCK)
