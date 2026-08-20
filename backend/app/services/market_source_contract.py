@@ -22,4 +22,4 @@ class ObservedShort:
     video_url: str | None
 
 
-SUPPORTED_SOURCE_LANES = {"anonymous_feed", "official_chart", "official_latest", "apify"}
+SUPPORTED_SOURCE_LANES = {"anonymous_feed", "official_chart", "official_latest", "apify", "innertube_general_browse", "innertube_general_search"}
