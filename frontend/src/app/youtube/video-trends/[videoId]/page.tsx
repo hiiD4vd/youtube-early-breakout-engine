@@ -1,8 +1,10 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
+import { PageState } from "@/components/page-state";
 
 type Observation = {
   observed_at: string;
@@ -43,19 +45,26 @@ const compact = new Intl.NumberFormat("en", {
   maximumFractionDigits: 1,
 });
 
+function youtubeWatchUrl(videoId: string, videoUrl?: string | null) {
+  return videoUrl || `https://www.youtube.com/watch?v=${videoId}`;
+}
+
 export default function VideoTrendDetail() {
   const params = useParams<{ videoId: string }>();
+  const pathname = usePathname();
   const videoId = params?.videoId;
+  const shortsOnly = pathname?.startsWith("/youtube/shorts-trends");
+  const endpoint = shortsOnly ? `/api/v1/youtube/shorts-trends/${videoId}/history` : `/api/v1/youtube/video-trends/${videoId}/history`;
   const { data, error } = useSWR<Response>(
-    videoId ? `/api/v1/youtube/video-trends/${videoId}/history` : null,
+    videoId ? endpoint : null,
     fetcher,
   );
 
   if (error) {
-    return <p className="text-red-400">Gagal memuat riwayat video.</p>;
+    return <PageState title="Riwayat video belum bisa dimuat" message="Backend belum berhasil mengembalikan timeline observasi untuk video ini." note="Kalau video baru saja masuk, kadang butuh satu siklus scan dulu sebelum detailnya tampil." tone="error" actionHref={shortsOnly ? "/youtube/shorts-trends" : "/youtube/video-trends"} actionLabel="Kembali ke daftar" />;
   }
   if (!data) {
-    return <p className="text-text-secondary">Memuat riwayat...</p>;
+    return <PageState title="Memuat riwayat video" message="Sistem sedang menyiapkan observasi dan grafik timeline." tone="loading" />;
   }
 
   const video = data.video;
@@ -78,17 +87,17 @@ export default function VideoTrendDetail() {
 
   return (
     <div className="mx-auto max-w-6xl">
-      <a href="/youtube/video-trends" className="inline-flex text-sm text-text-secondary hover:text-neon">
-        Back to video trends
+      <a href={shortsOnly ? "/youtube/shorts-trends" : "/youtube/video-trends"} className="inline-flex text-sm text-text-secondary hover:text-neon">
+        Back to {shortsOnly ? "Shorts trends" : "video trends"}
       </a>
 
       <section className="mt-5 rounded-2xl border border-line bg-[radial-gradient(circle_at_85%_0%,rgba(255,184,0,.13),transparent_35%),rgb(var(--surface))] p-6 md:p-8">
         <div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]">
           <div className="space-y-4">
             <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[.16em] text-warning">
-              <span>Video trend detail</span>
+              <span>{shortsOnly ? "Shorts trend detail" : "Video trend detail"}</span>
               <span className="rounded-full border border-line bg-bg-primary/40 px-2 py-1 text-[10px] tracking-[.12em] text-text-secondary">
-                {video?.rank ?? "-"} rank
+                regional #{video?.rank ?? "-"}
               </span>
             </div>
             <h1 className="text-3xl font-bold tracking-tight md:text-4xl">
@@ -98,8 +107,21 @@ export default function VideoTrendDetail() {
               {video?.channel_title || "Unknown channel"}
             </p>
             <p className="max-w-3xl text-sm leading-6 text-text-secondary">
-              Halaman ini menunjukkan gerak satu video di chart publik YouTube dari waktu ke waktu. Ini bukan total resmi YouTube, tetapi observasi sistem pada chart regional yang kita kumpulkan sendiri.
+              {shortsOnly
+                ? "Halaman ini menunjukkan gerak satu Shorts di chart publik YouTube dari waktu ke waktu. Ini bukan total resmi YouTube, tetapi observasi sistem pada chart Shorts yang kita kumpulkan sendiri."
+                : "Halaman ini menunjukkan gerak satu video di chart publik YouTube dari waktu ke waktu. Ini bukan total resmi YouTube, tetapi observasi sistem pada chart regional yang kita kumpulkan sendiri."}
             </p>
+            {video?.video_url && (
+              <a
+                href={youtubeWatchUrl(video.video_id, video.video_url)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center rounded-full border border-warning/40 bg-warning px-4 py-2 text-sm font-semibold text-bg-primary transition hover:bg-warning/90"
+                aria-label={`Watch ${video.title || videoId} on YouTube`}
+              >
+                Open on YouTube
+              </a>
+            )}
             <div className="flex flex-wrap gap-2 text-xs text-text-secondary">
               {video?.duration && <span className="rounded-full border border-line bg-bg-primary/40 px-2.5 py-1">{video.duration}</span>}
               {video?.published_at && <span className="rounded-full border border-line bg-bg-primary/40 px-2.5 py-1">Published {new Date(video.published_at).toLocaleDateString()}</span>}
@@ -150,7 +172,7 @@ export default function VideoTrendDetail() {
               {latest?.region || "-"} | {latest?.source_lane || "unknown lane"}
             </p>
             <p className="mt-1 text-sm text-text-secondary">
-              Rank {latest?.source_rank ?? "-"} | Views {compact.format(latest?.view_count ?? 0)}
+              Regional rank {latest?.source_rank ?? "-"} | Views {compact.format(latest?.view_count ?? 0)}
             </p>
           </div>
         </div>
@@ -183,7 +205,7 @@ export default function VideoTrendDetail() {
               </div>
               <div className="text-right">
                 <div className="font-mono text-lg">{obs.source_rank ?? "-"}</div>
-                <div className="text-xs text-text-secondary">rank</div>
+                <div className="text-xs text-text-secondary">regional rank</div>
               </div>
             </div>
           ))}

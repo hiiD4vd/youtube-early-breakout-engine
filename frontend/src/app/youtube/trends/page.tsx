@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
+import { PageState } from "@/components/page-state";
 
 type Snapshot = {
   observed_at: string;
@@ -50,8 +51,21 @@ const categories = [
   { label: "Sports", value: "sports" },
   { label: "News", value: "news" },
 ];
-const regions = ["All regions", "ID", "US", "GB", "JP", "BR", "IN", "MX"];
-const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
+const regions = [
+  "Combined tracked regions",
+  "ID",
+  "US",
+  "GB",
+  "JP",
+  "BR",
+  "IN",
+  "MX",
+];
+const regionNames = new Intl.DisplayNames(["id"], { type: "region" });
+function regionLabel(value: string) {
+  if (value === "Combined tracked regions") return value;
+  return regionNames.of(value) ?? value;
+}
 const format = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -120,13 +134,25 @@ function TopicBadge({ topic }: { topic: Topic }) {
         ? "bg-sky-400/10 text-sky-300"
         : "bg-warning/10 text-warning";
 
+  const stageLabel: Record<string, string> = {
+    WATCHING: "Sedang diperiksa",
+    AWAITING_CONTENT_VALIDATION: "Memeriksa isi video",
+    QUARANTINED_METADATA_MISMATCH: "Judul tidak sesuai isi",
+    THEME: "Topik berulang",
+    EMERGING: "Mulai terlihat",
+    ACCELERATING: "Pertumbuhan meningkat",
+    CONFIRMED: "Bukti kuat",
+    COOLING: "Tidak lagi bertambah cepat",
+    ARCHIVED: "Riwayat",
+    METADATA_EMERGING: "Mulai terlihat dari metadata",
+  };
   return (
     <>
       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${style}`}>
         {label}
       </span>
       <span className="rounded-full bg-white/[.05] px-2 py-0.5 text-[10px] font-semibold text-text-secondary">
-        {topic.status.toLowerCase()}
+        {stageLabel[topic.status] || "Sedang dipantau"}
       </span>
     </>
   );
@@ -151,10 +177,10 @@ function Stat({
 }
 
 export default function TrendingTopicsPage() {
-  const [region, setRegion] = useState("All regions");
+  const [region, setRegion] = useState("Combined tracked regions");
   const [category, setCategory] = useState("");
   const query = `/api/v1/youtube/market/ranked-topics?${new URLSearchParams({
-    ...(region === "All regions" ? {} : { region }),
+    ...(region === "Combined tracked regions" ? {} : { region }),
     ...(category ? { category } : {}),
   })}`;
   const { data, error } = useSWR<TopicResponse>(query, fetcher, {
@@ -162,10 +188,10 @@ export default function TrendingTopicsPage() {
   });
 
   if (error) {
-    return <p className="text-red-400">Topik belum dapat dimuat. Sistem akan mencoba lagi otomatis.</p>;
+    return <PageState title="Topik belum dapat dimuat" message="Backend belum mengembalikan ranked topics atau pipeline masih mengisi data." note="Data yang sudah ada tetap aman; yang belum tampil hanya lapisan daftar publiknya." tone="error" actionHref="/youtube/topic-pool" actionLabel="Lihat topic pool" />;
   }
   if (!data) {
-    return <p className="text-text-secondary">Memuat topik yang sedang bergerak...</p>;
+    return <PageState title="Memuat topik yang sedang bergerak" message="Sistem sedang menyusun ranking topik dari bukti lintas-channel." tone="loading" />;
   }
 
   const topTopic = data.items[0];
@@ -208,7 +234,11 @@ export default function TrendingTopicsPage() {
         />
         <Stat
           label="Current filter"
-          value={region === "All regions" ? "Global" : region}
+          value={
+            region === "Combined tracked regions"
+              ? "Combined tracked regions"
+              : region
+          }
           note={category || "All categories"}
         />
         <Stat
@@ -259,18 +289,17 @@ export default function TrendingTopicsPage() {
             </button>
           ))}
         </div>
-        <select
+          <select
           aria-label="Region"
           value={region}
           onChange={(event) => setRegion(event.target.value)}
           className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-text-primary outline-none"
         >
           {regions.map((item) => (
-            <option key={item} value={item}>
-              {item}
-              {item === "All regions" ? "" : ` - ${regionNames.of(item) ?? item}`}
-            </option>
-          ))}
+              <option key={item} value={item}>
+                {regionLabel(item)}
+              </option>
+            ))}
         </select>
       </div>
 

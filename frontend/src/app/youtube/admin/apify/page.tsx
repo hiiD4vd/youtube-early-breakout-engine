@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { fetcher, API_BASE } from "@/lib/api";
+import { PageState } from "@/components/page-state";
 
 export default function ApifyAdminPage() {
   const [loading, setLoading] = useState(true);
@@ -63,7 +64,15 @@ export default function ApifyAdminPage() {
     refreshInterval: 60_000,
   });
 
-  if (loading) return <p className="text-text-secondary">Memuat...</p>;
+  if (loading) {
+    return (
+      <PageState
+        title="Memuat konfigurasi Apify"
+        message="Sistem sedang membaca setting actor dan status lane Apify."
+        tone="loading"
+      />
+    );
+  }
 
   return (
     <div className="mx-auto max-w-3xl">

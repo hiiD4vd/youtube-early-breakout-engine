@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
+import { PageState } from "@/components/page-state";
 
 type Snapshot = {
   observed_at: string;
@@ -112,21 +113,33 @@ export default function TopicDetailPage() {
   );
 
   if (error) {
-    return <p className="text-red-400">Topik tidak ditemukan atau belum tersedia.</p>;
+    return <PageState title="Topik tidak ditemukan" message="Detail ranked topic belum tersedia atau backend belum sempat menyiapkan data." tone="error" actionHref="/youtube/topic-pool" actionLabel="Back to topic pool" />;
   }
   if (!data) {
-    return <p className="text-text-secondary">Memuat detail topik...</p>;
+    return <PageState title="Memuat detail topik" message="Sistem sedang mengumpulkan snapshot dan evidence untuk topik ini." tone="loading" actionHref="/youtube/topic-pool" actionLabel="Back to topic pool" />;
   }
 
   const isTheme = data.status === "THEME" || data.topic_type.endsWith("_theme");
   const buckets = data.freshness?.buckets || {};
   const truth = data.content_truth || {};
   const verificationStatus = truth.status || "AWAITING_CONTENT_VALIDATION";
+  const stageLabel: Record<string, string> = {
+    WATCHING: "Sedang diperiksa",
+    AWAITING_CONTENT_VALIDATION: "Memeriksa isi video",
+    QUARANTINED_METADATA_MISMATCH: "Judul tidak sesuai isi",
+    THEME: "Topik berulang",
+    EMERGING: "Mulai terlihat",
+    ACCELERATING: "Pertumbuhan meningkat",
+    CONFIRMED: "Bukti kuat",
+    COOLING: "Tidak lagi bertambah cepat",
+    ARCHIVED: "Riwayat",
+    METADATA_EMERGING: "Mulai terlihat dari metadata",
+  };
 
   return (
     <div className="mx-auto max-w-[1500px]">
-      <Link href="/youtube/trends" className="inline-flex text-sm text-text-secondary hover:text-neon">
-        Back to trending topics
+      <Link href="/youtube/topic-pool" className="inline-flex text-sm text-text-secondary hover:text-neon">
+        Back to topic pool
       </Link>
 
       <section className="mt-5 rounded-2xl border border-line bg-[radial-gradient(circle_at_90%_10%,rgba(55,125,255,.18),transparent_32%),rgb(var(--surface))] p-6 md:p-8">
@@ -140,7 +153,7 @@ export default function TopicDetailPage() {
                 {data.label}
               </h1>
               <span className="rounded-full border border-line bg-bg-primary/40 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[.14em] text-text-secondary">
-                {data.status.toLowerCase()}
+                {stageLabel[data.status] || "Sedang dipantau"}
               </span>
             </div>
             <p className="mt-3 max-w-xl text-sm leading-6 text-text-secondary">

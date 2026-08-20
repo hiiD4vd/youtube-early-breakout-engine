@@ -3,6 +3,7 @@
 import Link from "next/link";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
+import { PageState } from "@/components/page-state";
 
 type Evidence = { video_id: string; thumbnail_url: string | null };
 type Snapshot = { observed_views: number };
@@ -25,8 +26,8 @@ function Sparkline({ snapshots }: { snapshots: Snapshot[] }) {
 
 export default function EarlyTopicsPage() {
   const { data, error } = useSWR<Response>("/api/v1/youtube/early-topics", fetcher, { refreshInterval: 60_000 });
-  if (error) return <p className="text-red-400">Early Topic Signals belum dapat dimuat.</p>;
-  if (!data) return <p className="text-text-secondary">Mencari pola baru dari sinyal organik...</p>;
+  if (error) return <PageState title="Early Topic Signals belum dapat dimuat" message="Lapisan sinyal awal belum menerima data yang cukup atau backend belum menjawab permintaan." note="Halaman ini tetap aman; yang gagal hanya pembacaan data, bukan pipeline discovery-nya." tone="error" actionHref="/youtube/report" actionLabel="Lihat laporan observasi" />;
+  if (!data) return <PageState title="Mencari pola baru" message="Sistem sedang menunggu sinyal organik yang masih kecil dan masih baru." note="Topik awal memang tidak langsung banyak; dia harus lewat bukti lintas channel dulu." tone="loading" />;
 
   return <div className="mx-auto max-w-[1500px]">
     <section className="rounded-2xl border border-line bg-[radial-gradient(circle_at_85%_0%,rgba(55,125,255,.18),transparent_35%),rgb(var(--surface))] px-6 py-7 md:px-8">

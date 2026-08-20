@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { API_BASE, fetcher } from "@/lib/api";
+import { PageState } from "@/components/page-state";
 
 type Member = { video_id: string; title: string | null; channel_title: string | null; video_url: string; thumbnail_url: string | null };
 type Candidate = { id: number; label: string; status: string; is_v2: boolean; member_count: number; channel_count: number; summary: string; instruction: string; members: Member[] };
@@ -30,15 +31,15 @@ export default function TopicReviewPage() {
     if (!candidate) return;
     setSaving(true); setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/v1/youtube/market/ranked-topics/${candidate.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision }) });
+      const response = await fetch(`${API_BASE}/youtube/market/ranked-topics/${candidate.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision }) });
       if (!response.ok) throw new Error("Keputusan belum tersimpan. Coba lagi.");
       setMessage("Tersimpan. Lanjut ke kandidat berikutnya.");
       await mutate(); setIndex(0);
     } catch (err) { setMessage(err instanceof Error ? err.message : "Keputusan belum tersimpan."); } finally { setSaving(false); }
   }
 
-  if (error) return <p className="text-red-400">Halaman review belum dapat dimuat.</p>;
-  if (!data) return <p className="text-text-secondary">Menyiapkan review sederhana...</p>;
+  if (error) return <PageState title="Halaman review belum dapat dimuat" message="Queue review tidak bisa diambil dari backend saat ini." note="Ini tidak menghapus kandidat; hanya tampilan review yang belum bisa dibaca." tone="error" />;
+  if (!data) return <PageState title="Memuat queue review" message="Sedang menunggu kandidat masuk ke antrean review." tone="loading" />;
 
   return <div className="mx-auto max-w-5xl">
     <p className="text-xs font-semibold uppercase tracking-[.2em] text-neon">Quality check</p>
