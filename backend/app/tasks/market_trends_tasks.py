@@ -175,18 +175,28 @@ def collect_general_video_chart(self: Task) -> dict[str, int | str | list[str]]:
                 db.add(source_run)
                 db.flush()
                 try:
-                    response = client.get(MARKET_CHART_URL, params={
-                        "key": settings.youtube_data_api_key,
-                        "part": "snippet,statistics,contentDetails",
-                        "chart": "mostPopular",
-                        "regionCode": region,
-                        # Omit videoCategoryId: YouTube returns the complete
-                        # regional chart by default. The row's categoryId is
-                        # still retained for later category filters.
-                        "maxResults": settings.market_general_chart_max_results,
-                    })
-                    response.raise_for_status()
-                    candidates = response.json().get("items", [])
+                    candidates = []
+                    page_token = None
+                    for _ in range(max(1, settings.market_general_chart_max_pages)):
+                        params = {
+                            "key": settings.youtube_data_api_key,
+                            "part": "snippet,statistics,contentDetails",
+                            "chart": "mostPopular",
+                            "regionCode": region,
+                            # Omit videoCategoryId: YouTube returns the complete
+                            # regional chart by default. The row's categoryId is
+                            # still retained for later category filters.
+                            "maxResults": settings.market_general_chart_max_results,
+                        }
+                        if page_token:
+                            params["pageToken"] = page_token
+                        response = client.get(MARKET_CHART_URL, params=params)
+                        response.raise_for_status()
+                        payload = response.json()
+                        candidates.extend(payload.get("items", []))
+                        page_token = payload.get("nextPageToken")
+                        if not page_token:
+                            break
                     run_created = run_duplicates = run_non_shorts = 0
                     for rank, item in enumerate(candidates, start=1):
                         statistics = item.get("statistics", {})

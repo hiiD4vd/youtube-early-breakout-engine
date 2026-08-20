@@ -160,10 +160,101 @@ def _status(*, semantic: bool, members: int, channels: int, history_ready: bool,
 
 
 def _semantic_groups(videos: list[ChartVideo]) -> list[SemanticGroup]:
-    # Per-video GLM fingerprints are the semantic source of truth. We do not
-    # call Gemini here: the stronger 9Router reviewer is used later, only on
-    # a handful of evidence-backed candidate groups.
-    return []
+    """Use LLM to group chart videos into semantic topic clusters."""
+    if len(videos) < 3:
+        return []
+    try:
+        # Build evidence text from all videos
+        lines = []
+        for idx, video in enumerate(videos[:50]):  # max 50 per batch
+            title = (video.title or "").strip()
+            channel = (video.channel_title or "unknown").strip()
+            region = (video.region or "").strip()
+            lines.append(f"[{idx}] {title} | Channel: {channel} | Region: {region}")
+        evidence = "\n".join(lines)
+
+        prompt = f"""You are analyzing YouTube trending video titles to identify topics.
+Below are titles from trending YouTube videos, each prefixed with its index.
+
+Identify the main TOPICS that are trending based on these titles.
+A topic needs at least 3 videos from 2+ different channels.
+
+Return a JSON object with a "topics" array (max 20 topics). Format:
+{{"topics": [{{"topic": "Euro 2024 semifinal", "kind": "sports", "confidence": "high", "trend_type": "news_event", "video_indices": [0, 3, 7]}}]}}
+
+DO NOT include:
+- Generic topics like "funny", "viral", "entertainment"
+- Person names alone — use the EVENT instead
+- Topics with fewer than 3 videos
+
+VIDEO TITLES:
+{evidence}
+
+Return ONLY the JSON object. No explanation."""
+        
+        client = MarketSemanticClient()
+        payload = client._request(prompt)
+        
+        # Extract topics array from response
+        if isinstance(payload, dict):
+            entries = payload.get("topics", [payload] if "topic" in payload else [])
+        elif isinstance(payload, list):
+            entries = payload
+        else:
+            return []
+        
+        groups: list[SemanticGroup] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            topic = entry.get("topic")
+            indices = entry.get("video_indices", [])
+            kind = entry.get("kind", "other")
+            confidence = entry.get("confidence", "medium")
+            trend_type = entry.get("trend_type", "other")
+            
+            if not topic or not isinstance(topic, str) or not isinstance(indices, list):
+                continue
+            if len(indices) < 3:
+                continue
+            
+            members: list[ChartVideo] = []
+            channels: set[str] = set()
+            regions: set[str] = set()
+            for idx in indices:
+                if isinstance(idx, int) and 0 <= idx < len(videos):
+                    video = videos[idx]
+                    members.append(video)
+                    if video.channel_id:
+                        channels.add(video.channel_id)
+                    if video.region:
+                        regions.add(video.region)
+            
+            if len(members) < 3 or len(channels) < 2:
+                continue
+            
+            conf_val = {"high": 0.85, "medium": 0.65, "low": 0.4}.get(str(confidence).lower(), 0.5)
+            
+            groups.append(SemanticGroup(
+                group=TopicGroup(
+                    label=topic.strip(),
+                    videos=members,
+                    channel_count=len(channels),
+                    region_count=len(regions),
+                    total_views=sum(v.views for v in members),
+                    confidence=confidence if isinstance(confidence, str) else "medium",
+                    trend_type=trend_type if isinstance(trend_type, str) else "other",
+                ),
+                label=topic.strip(),
+                topic_type=kind if isinstance(kind, str) else "other",
+                summary=f"LLM-identified topic from {len(members)} videos across {len(channels)} channels.",
+                entities=[],
+                confidence=conf_val,
+            ))
+        
+        return groups
+    except Exception:
+        return []
 
 
 def _fingerprint_groups(db, videos: list[ChartVideo]) -> list[SemanticGroup]:
