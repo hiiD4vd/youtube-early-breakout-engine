@@ -157,6 +157,9 @@ class Settings(BaseSettings):
     # A cooled topic becomes archive-only after this long. It is never
     # deleted: archived evidence remains usable for audit and learning.
     market_topic_archive_after_hours: int = 336
+    # Topic Pool is a read-heavy analytical view. Cache the complete ranked
+    # list briefly so pagination/search do not repeat the same aggregation.
+    topic_pool_cache_ttl_seconds: int = 120
     market_feed_pages_per_region: int = 20
     market_feed_target_per_region: int = 100
     # Several clean, logged-out cohorts reduce dependence on one feed path.
@@ -169,6 +172,10 @@ class Settings(BaseSettings):
     market_shorts_verify_interval_minutes: int = 5
     market_shorts_verify_batch_size: int = 48
     market_shorts_verify_workers: int = 6
+    # Optional Netscape-format cookies.txt mounted into the container; used by
+    # yt-dlp for Shorts verification and transcript fetch to avoid intermittent
+    # YouTube bot-detection blocks. Empty = no cookies passed.
+    yt_dlp_cookies_path: str = ""
     # Title-overlap fallback topics are only useful while the semantic provider
     # is down. When the provider is healthy this lexical fallback fragments the
     # topic table (one topic per title word), so it is disabled by default.

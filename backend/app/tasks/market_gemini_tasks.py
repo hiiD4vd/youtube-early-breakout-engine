@@ -53,8 +53,14 @@ def _semantic_request(client: MarketSemanticClient, video: MarketVideo):
     yt-dlp load without improving the fingerprint.
     """
     transcript = None
-    if video.shorts_status == "VERIFIED_SHORTS" and video.video_url:
-        transcript = fetch_transcript(video.video_url)
+    if video.shorts_status == "VERIFIED_SHORTS":
+        # Prefer the transcript already captured during verification; fall back
+        # to a fresh fetch only when verification never stored one.
+        stored = ((video.source_provenance or {}).get("shorts_verification") or {}).get("transcript")
+        if stored:
+            transcript = stored
+        elif video.video_url:
+            transcript = fetch_transcript(video.video_url)
     return client.analyze(video.title or "", video.description, transcript)
 
 

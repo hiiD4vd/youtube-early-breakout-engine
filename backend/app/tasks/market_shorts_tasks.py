@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models.market_trends import MarketVideo
 from app.services.seed_store import SeedStore
+from app.services.transcript import _ytdlp_cookie_args, fetch_transcript
 from app.tasks.celery_app import celery_app
 
 VERIFY_LOCK = "ycgc:youtube:lock:market-shorts-verify"
@@ -33,7 +34,7 @@ def _dimensions(info: dict) -> tuple[int, int]:
 
 def _verify(video_id: str) -> tuple[str, dict]:
     result = subprocess.run(
-        ["yt-dlp", "--skip-download", "--dump-single-json", "--no-warnings", f"https://www.youtube.com/watch?v={video_id}"],
+        ["yt-dlp", "--skip-download", "--dump-single-json", "--no-warnings", *_ytdlp_cookie_args(), f"https://www.youtube.com/watch?v={video_id}"],
         capture_output=True, text=True, timeout=45,
     )
     if result.returncode != 0 or not result.stdout:
@@ -51,6 +52,11 @@ def _verify(video_id: str) -> tuple[str, dict]:
     # only. A short-duration landscape video is still rejected, regardless of
     # which source returned it.
     if 0 < duration <= 180 and width > 0 and height >= width:
+        # Piggyback the caption fetch here so the semantic enrichment never
+        # re-downloads it: one verification pass yields dimensions + transcript.
+        transcript = fetch_transcript(f"https://www.youtube.com/watch?v={video_id}", timeout=60)
+        if transcript:
+            evidence["transcript"] = transcript
         return "VERIFIED_SHORTS", evidence
     if width > 0 and height > 0 and width > height:
         return "REJECTED_NOT_SHORTS", {**evidence, "reason": "landscape_video"}
