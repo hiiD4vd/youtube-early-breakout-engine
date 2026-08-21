@@ -16,7 +16,10 @@ class MarketVideo(Base):
     """A public video observed by a broad market source, not an Early Breakout."""
 
     __tablename__ = "market_videos"
-    __table_args__ = (Index("ix_market_videos_published_at", "published_at"),)
+    __table_args__ = (
+        Index("ix_market_videos_published_at", "published_at"),
+        Index("ix_market_videos_shorts_published", "shorts_status", "published_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     video_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
@@ -42,6 +45,7 @@ class MarketVideoObservation(Base):
     __table_args__ = (
         UniqueConstraint("market_video_id", "observed_at", "source_lane", "region", "category_id", name="uq_market_observation_source_time"),
         Index("ix_market_observations_observed_at", "observed_at"),
+        Index("ix_market_observations_video_time", "market_video_id", "observed_at"),
         Index("ix_market_observations_lane_region", "source_lane", "region"),
     )
 
@@ -136,7 +140,10 @@ class MarketContentTruthAudit(Base):
 
 class MarketTopic(Base):
     __tablename__ = "market_topics"
-    __table_args__ = (Index("ix_market_topics_status_score", "status", "trend_score"),)
+    __table_args__ = (
+        Index("ix_market_topics_status_score", "status", "trend_score"),
+        Index("ix_market_topics_status_seen", "status", "last_observed_at"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PRIVATE_CANDIDATE")
@@ -151,7 +158,10 @@ class MarketTopic(Base):
 
 class MarketTopicMembership(Base):
     __tablename__ = "market_topic_memberships"
-    __table_args__ = (UniqueConstraint("market_video_id", name="uq_market_video_topic"),)
+    __table_args__ = (
+        UniqueConstraint("market_video_id", name="uq_market_video_topic"),
+        Index("ix_market_memberships_topic_video", "market_topic_id", "market_video_id"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     market_topic_id: Mapped[int] = mapped_column(ForeignKey("market_topics.id", ondelete="CASCADE"), nullable=False)
     market_video_id: Mapped[int] = mapped_column(ForeignKey("market_videos.id", ondelete="CASCADE"), nullable=False)
