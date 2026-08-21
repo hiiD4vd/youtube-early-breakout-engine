@@ -71,7 +71,7 @@ function MiniTrend({ topic }: { topic: Topic }) {
 function EvidenceThumbs({ members }: { members: Evidence[] }) {
   return <div className="flex gap-2 overflow-hidden">
     {members.slice(0, 5).map((item) => <div key={item.video_id} className="relative h-[76px] w-[54px] shrink-0 overflow-hidden rounded-lg border border-line bg-bg-secondary">
-      {item.thumbnail_url && <img src={item.thumbnail_url} alt="" className="h-full w-full object-cover" />}
+      {item.thumbnail_url && <img src={item.thumbnail_url} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />}
       {!!item.current_view_count && <span className="absolute inset-x-0 bottom-0 bg-black/75 px-1 py-0.5 text-center text-[9px] text-white">▶ {compact.format(item.current_view_count)}</span>}
     </div>)}
   </div>;
@@ -85,7 +85,8 @@ export default function TopicPoolPage() {
   const [scope, setScope] = useState<Scope>("combined");
   const [period, setPeriod] = useState<Period>("7d");
   const offset = (page - 1) * pageSize;
-  const { data, error } = useSWR<Response>(`/api/v1/youtube/topic-pool?limit=${pageSize}&offset=${offset}&scope=${scope}&period=${period}${debouncedQuery ? `&q=${encodeURIComponent(debouncedQuery)}` : ""}`, fetcher, { refreshInterval: 60_000 });
+  const requestKey = `/api/v1/youtube/topic-pool?limit=${pageSize}&offset=${offset}&scope=${scope}&period=${period}${debouncedQuery ? `&q=${encodeURIComponent(debouncedQuery)}` : ""}`;
+  const { data, error, isLoading } = useSWR<Response>(requestKey, fetcher, { refreshInterval: 60_000, keepPreviousData: false });
 
   useEffect(() => setPage(1), [scope, period]);
 
@@ -97,10 +98,13 @@ export default function TopicPoolPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  const items = data?.items || [];
+  // Never render rows cached for another filter selection. This makes rapid
+  // switching deterministic even while the new server response is in flight.
+  const responseMatchesSelection = data?.scope === scope && data?.period === period;
+  const items = responseMatchesSelection ? data.items : [];
 
   if (error) return <PageState title="Topic pool belum dapat dimuat" message="Frontend gagal membaca data calon topik." note="Data yang sudah tersimpan tidak dihapus." tone="error" actionHref="/youtube/report" actionLabel="Cek laporan kesehatan" />;
-  if (!data) return <PageState title="Memuat calon topik" message="Mengambil daftar topik dan video terkait." tone="loading" />;
+  if (isLoading || !data || !responseMatchesSelection) return <PageState title="Menghitung ulang peringkat" message={`Menyiapkan topik untuk ${scope === "shorts" ? "Shorts saja" : scope === "videos" ? "video biasa" : "semua jenis video"} pada periode ${period === "today" ? "hari ini" : period === "30d" ? "30 hari" : "7 hari"}.`} tone="loading" />;
 
   return <div className="mx-auto max-w-[1500px]">
     <section className="flex flex-wrap items-end justify-between gap-5 border-b border-line pb-5">
