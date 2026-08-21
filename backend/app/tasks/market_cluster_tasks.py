@@ -46,6 +46,20 @@ def _phrase(value: object) -> str:
     return " ".join(re.findall(r"[\w']+", str(value or "").casefold()))
 
 
+_THEME_STOPWORDS = {"and", "the", "a", "an", "of", "for", "with", "to", "in", "on", "or"}
+
+
+def _theme_jaccard(a: str, b: str) -> float:
+    """Token-set similarity between normalized theme phrases."""
+    if not a or not b:
+        return 0.0
+    ta = {token for token in a.split() if token not in _THEME_STOPWORDS}
+    tb = {token for token in b.split() if token not in _THEME_STOPWORDS}
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
 def _identity(feature: MarketVideoFeature) -> tuple[str, str, set[str], str]:
     semantic = _semantic(feature)
     theme = _phrase(semantic.get("topic_theme"))
@@ -61,6 +75,9 @@ def _identity_keys(feature: MarketVideoFeature) -> set[str]:
     keys: set[str] = set()
     if theme:
         keys.add(f"theme:{theme}")
+        tokens = theme.split()
+        if len(tokens) >= 2:
+            keys.add(f"theme_stem:{' '.join(tokens[:2])}")
     if content_format:
         keys.add(f"format:{content_format}")
     if topic_type:
@@ -77,6 +94,8 @@ def _compatible(candidate: MarketVideoFeature, anchors: list[MarketVideoFeature]
             return True, True
         if candidate_format and content_format and candidate_format == content_format:
             return True, True
+        if candidate_theme and theme and _theme_jaccard(candidate_theme, theme) >= 0.5:
+            return True, False
         if candidate_entities & entities and candidate_type and candidate_type == topic_type:
             return True, False
     return False, False
