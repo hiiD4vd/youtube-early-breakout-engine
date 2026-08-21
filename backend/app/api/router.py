@@ -1,11 +1,14 @@
 import csv
 import httpx
+import json
 from collections import defaultdict
 from hashlib import sha256
 from datetime import UTC, datetime, timedelta
 from io import StringIO
+from math import log1p
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, desc, exists, func, select
@@ -28,6 +31,7 @@ PUBLIC_TREND_STATUSES = ("EMERGING", "ACCELERATING", "CONFIRMED")
 REVIEW_DECISIONS = ("CONFIRM_CLUSTER", "REJECT_CLUSTER", "SPLIT_NEEDED", "INSUFFICIENT_EVIDENCE")
 RANKED_TOPIC_REVIEW_DECISIONS = ("VALID_TOPIC", "WRONG_MERGE", "TOO_GENERIC", "NOT_A_TREND", "NEEDS_MORE_EVIDENCE")
 NON_FOLLOWABLE_TOPIC_LABELS = {"animals", "food", "music", "comedy", "entertainment", "sports", "kick", "goal", "prank", "coach", "lucu", "they", "streamer", "volleyball"}
+TOPIC_POOL_CACHE_SCHEMA = "v4"
 
 
 def _semantic_cooldown_key() -> str:
@@ -1795,6 +1799,301 @@ def _period_growth_views(snapshots_desc: list, cutoff: datetime) -> int:
     return max(0, latest - baseline)
 
 
+def _topic_pool_cache_key(scope: str, period: str) -> str:
+    return f"ycgc:youtube:topic-pool:{TOPIC_POOL_CACHE_SCHEMA}:{scope}:{period}"
+
+
+def _read_topic_pool_cache(scope: str, period: str) -> dict | None:
+    """Read a short-lived leaderboard cache; Redis failure never breaks API."""
+    try:
+        raw = SeedStore().client.get(_topic_pool_cache_key(scope, period))
+        value = json.loads(raw) if raw else None
+        return value if isinstance(value, dict) and isinstance(value.get("items"), list) else None
+    except Exception:
+        return None
+
+
+def _write_topic_pool_cache(scope: str, period: str, payload: dict) -> None:
+    """Cache only JSON-safe list data; source evidence remains durable in DB."""
+    try:
+        SeedStore().client.set(
+            _topic_pool_cache_key(scope, period),
+            json.dumps(jsonable_encoder(payload), separators=(",", ":")),
+            ex=max(10, settings.topic_pool_cache_ttl_seconds),
+        )
+    except Exception:
+        pass
+
+
+def _topic_pool_list_item(item: dict) -> dict:
+    """Small list DTO. Full evidence belongs to the topic detail endpoint."""
+    members = [{
+        "video_id": member.get("video_id"),
+        "thumbnail_url": member.get("thumbnail_url"),
+        "current_view_count": member.get("current_view_count"),
+    } for member in (item.get("members") or [])[:5]]
+    snapshots = [{
+        "observed_velocity_per_hour": snapshot.get("observed_velocity_per_hour", 0),
+    } for snapshot in (item.get("snapshots") or [])[-8:]]
+    summary = item.get("human_summary") or {}
+    return {
+        "id": item.get("id"),
+        "detail_href": item.get("detail_href"),
+        "source_type": item.get("source_type"),
+        "label": item.get("label"),
+        "niche": item.get("niche"),
+        "status": item.get("status"),
+        "observed_views": int(item.get("observed_views") or 0),
+        "observed_velocity_per_hour": float(item.get("observed_velocity_per_hour") or 0),
+        "organic_velocity_per_hour": float(item.get("organic_velocity_per_hour") or 0),
+        "member_count": int(item.get("member_count") or 0),
+        "channel_count": int(item.get("channel_count") or 0),
+        "members": members,
+        "snapshots": snapshots,
+        "media_mix": item.get("media_mix") or {"shorts": 0, "videos": 0},
+        "period_growth_views": int(item.get("period_growth_views") or 0),
+        "human_summary": {"movement": summary.get("movement")},
+        "ranking_score": float(item.get("ranking_score") or 0),
+        "ranking_reason": item.get("ranking_reason"),
+    }
+
+
+def _topic_pool_response(
+    core: dict,
+    *,
+    scope: str,
+    period: str,
+    search: str | None,
+    offset: int,
+    limit: int,
+    cache_state: str,
+) -> dict:
+    ranked_items = core.get("items") or []
+    if search:
+        needle = search.casefold()
+        ranked_items = [item for item in ranked_items if needle in str(item.get("label") or "").casefold()]
+    total_items = len(ranked_items)
+    items = ranked_items[offset:offset + limit]
+    return {
+        "items": items,
+        "total_items": total_items,
+        "offset": offset,
+        "limit": limit,
+        "scope": scope,
+        "period": period,
+        "has_more": offset + len(items) < total_items,
+        "diagnostics": core.get("diagnostics") or {},
+        "cache": {
+            "state": cache_state,
+            "generated_at": core.get("generated_at"),
+            "ttl_seconds": settings.topic_pool_cache_ttl_seconds,
+        },
+        "methodology": core.get("methodology"),
+    }
+
+
+def _scoped_market_topic_items(
+    db: Session,
+    conditions: list,
+    *,
+    scope: str,
+    cutoff: datetime,
+) -> list[dict]:
+    """Rebuild topic evidence and movement for one media scope.
+
+    MarketTopic stores a combined aggregate. Reusing that aggregate after a
+    user selects Shorts-only or ordinary-video-only makes the filter cosmetic:
+    a topic dominated by ordinary videos can still rank first in Shorts. This
+    helper deliberately derives every displayed metric from matching members.
+    """
+    topics = db.scalars(select(MarketTopic).where(*conditions)).all()
+    if not topics:
+        return []
+
+    topic_by_id = {topic.id: topic for topic in topics}
+    membership_stmt = (
+        select(MarketTopicMembership.market_topic_id, MarketVideo)
+        .join(MarketVideo, MarketVideo.id == MarketTopicMembership.market_video_id)
+        .where(MarketTopicMembership.market_topic_id.in_(topic_by_id))
+    )
+    if scope == "shorts":
+        membership_stmt = membership_stmt.where(MarketVideo.shorts_status == "VERIFIED_SHORTS")
+    elif scope == "videos":
+        membership_stmt = membership_stmt.where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+    else:
+        # Unverified format rows remain stored but cannot affect either a
+        # format-specific or combined leaderboard until classification ends.
+        membership_stmt = membership_stmt.where(
+            MarketVideo.shorts_status.in_(("VERIFIED_SHORTS", "REJECTED_NOT_SHORTS"))
+        )
+
+    # Use the video id as the evidence identity. Even if a malformed or legacy
+    # membership row is duplicated, it must never inflate the scoped rank.
+    members_by_topic: dict[int, dict[int, MarketVideo]] = defaultdict(dict)
+    video_ids: set[int] = set()
+    for topic_id, video in db.execute(membership_stmt).all():
+        members_by_topic[topic_id][video.id] = video
+        video_ids.add(video.id)
+    if not video_ids:
+        return []
+
+    observation_rows = db.execute(
+        select(
+            MarketVideoObservation.market_video_id,
+            func.min(MarketVideoObservation.view_count).label("baseline_views"),
+            func.max(MarketVideoObservation.view_count).label("latest_views"),
+            func.min(MarketVideoObservation.observed_at).label("first_at"),
+            func.max(MarketVideoObservation.observed_at).label("last_at"),
+            func.count(MarketVideoObservation.id).label("observation_count"),
+        )
+        .where(
+            MarketVideoObservation.market_video_id.in_(video_ids),
+            MarketVideoObservation.observed_at >= cutoff,
+            MarketVideoObservation.source_lane != "apify",
+        )
+        .group_by(MarketVideoObservation.market_video_id)
+    ).all()
+    stats = {row.market_video_id: row for row in observation_rows}
+
+    regions_by_video: dict[int, set[str]] = defaultdict(set)
+    for video_id, region in db.execute(
+        select(MarketVideoObservation.market_video_id, MarketVideoObservation.region)
+        .where(
+            MarketVideoObservation.market_video_id.in_(video_ids),
+            MarketVideoObservation.observed_at >= cutoff,
+            MarketVideoObservation.region.is_not(None),
+        )
+        .distinct()
+    ).all():
+        if region:
+            regions_by_video[video_id].add(region)
+
+    now = datetime.now(UTC)
+    items: list[dict] = []
+    for topic_id, member_map in members_by_topic.items():
+        # A member without an observation inside the selected period cannot
+        # influence that period's leaderboard.
+        members = [video for video in member_map.values() if video.id in stats]
+        channels = {video.channel_id for video in members if video.channel_id}
+        if len(members) < 2 or len(channels) < 2:
+            continue
+
+        observed_views = 0
+        period_growth = 0
+        organic_velocity = 0.0
+        regions: set[str] = set()
+        member_views: dict[int, int] = {}
+        for video in members:
+            row = stats[video.id]
+            latest = max(0, int(row.latest_views or 0))
+            baseline = max(0, int(row.baseline_views or 0))
+            growth = max(0, latest - baseline)
+            elapsed_hours = max(0.0, (row.last_at - row.first_at).total_seconds() / 3600)
+            observed_views += latest
+            period_growth += growth
+            if row.observation_count >= 2 and elapsed_hours > 0:
+                organic_velocity += growth / elapsed_hours
+            regions.update(regions_by_video.get(video.id, set()))
+            member_views[video.id] = latest
+
+        fresh_count = sum(
+            1
+            for video in members
+            if video.published_at and video.published_at.astimezone(UTC) >= cutoff
+        )
+        media_mix = {
+            "shorts": sum(1 for video in members if video.shorts_status == "VERIFIED_SHORTS"),
+            "videos": sum(1 for video in members if video.shorts_status == "REJECTED_NOT_SHORTS"),
+        }
+        evidence = sorted(members, key=lambda video: member_views.get(video.id, 0), reverse=True)
+        movement = "RISING" if period_growth > 0 and organic_velocity > 0 else "COLLECTING_HISTORY"
+        topic = topic_by_id[topic_id]
+        items.append({
+            "id": f"market-{topic.id}",
+            "detail_href": f"/youtube/trends/market/{topic.id}?scope={scope}",
+            "source_type": "market_video",
+            "label": topic.label,
+            "niche": None,
+            "status": topic.status,
+            "observed_views": observed_views,
+            "observed_velocity_per_hour": round(organic_velocity, 2),
+            "organic_velocity_per_hour": round(organic_velocity, 2),
+            "member_count": len(members),
+            "channel_count": len(channels),
+            "members": [{
+                "video_id": video.video_id,
+                "thumbnail_url": video.thumbnail_url,
+                "current_view_count": member_views.get(video.id, 0),
+            } for video in evidence[:8]],
+            # Combined topic snapshots are intentionally not reused here. They
+            # contain the other media format and would misrepresent this scope.
+            "snapshots": [],
+            "media_mix": media_mix,
+            "period_growth_views": period_growth,
+            "human_summary": {
+                "movement": movement,
+                "region_count": len(regions),
+                "fresh_count": fresh_count,
+            },
+            "_region_count": len(regions),
+            "_fresh_ratio": fresh_count / max(1, len(members)),
+        })
+    return items
+
+
+def _rank_scoped_topic_pool(items: list[dict]) -> list[dict]:
+    """Create one comparable, scope-local score for both topic sources."""
+    if not items:
+        return items
+
+    max_growth = max((int(item.get("period_growth_views") or 0) for item in items), default=0)
+    max_velocity = max((float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0) for item in items), default=0)
+    max_channels = max((int(item.get("channel_count") or 0) for item in items), default=0)
+    max_regions = max((int(item.get("_region_count") or (item.get("human_summary") or {}).get("region_count") or 0) for item in items), default=0)
+
+    for item in items:
+        growth = max(0, int(item.get("period_growth_views") or 0))
+        velocity = max(0.0, float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0))
+        channels = max(0, int(item.get("channel_count") or 0))
+        regions = max(0, int(item.get("_region_count") or (item.get("human_summary") or {}).get("region_count") or 0))
+        fresh_ratio = float(item.get("_fresh_ratio") or 0)
+        if not fresh_ratio:
+            summary = item.get("human_summary") or {}
+            fresh_ratio = min(1.0, float(summary.get("fresh_72h_count") or summary.get("fresh_24h_count") or 0) / max(1, int(item.get("member_count") or 0)))
+
+        growth_component = 45 * (log1p(growth) / log1p(max_growth) if max_growth else 0)
+        velocity_component = 20 * (log1p(velocity) / log1p(max_velocity) if max_velocity else 0)
+        creator_component = 15 * (channels / max_channels if max_channels else 0)
+        region_component = 10 * (regions / max_regions if max_regions else 0)
+        freshness_component = 10 * min(1.0, fresh_ratio)
+        score = growth_component + velocity_component + creator_component + region_component + freshness_component
+        item["ranking_score"] = round(score, 2)
+
+        strongest = max(
+            (
+                (growth_component, f"naik {growth:,} views dari video yang sudah ada di pilihan ini"),
+                (velocity_component, f"momentum {velocity:,.0f} views/jam pada pilihan ini"),
+                (creator_component, f"dibuktikan oleh {channels} kreator pada pilihan ini"),
+                (region_component, f"terlihat di {regions} wilayah pada pilihan ini"),
+                (freshness_component, "bukti videonya masih baru"),
+            ),
+            key=lambda value: value[0],
+        )[1]
+        item["ranking_reason"] = f"Peringkat scope ini terutama karena {strongest}."
+        item.pop("_region_count", None)
+        item.pop("_fresh_ratio", None)
+
+    return sorted(
+        items,
+        key=lambda item: (
+            float(item.get("ranking_score") or 0),
+            int(item.get("period_growth_views") or 0),
+            int(item.get("channel_count") or 0),
+        ),
+        reverse=True,
+    )
+
+
 @api_router.get("/youtube/topic-pool")
 def list_youtube_topic_pool(
     limit: int = Query(default=40, ge=1, le=100),
@@ -1822,64 +2121,39 @@ def list_youtube_topic_pool(
         ~MarketTopic.label.ilike("%title-overlap candidate%"),
     ]
     search = q.strip() if q and q.strip() else None
-    if search:
-        like = f"%{search}%"
-        cluster_conditions.append(TrendCluster.label.ilike(like))
-        market_conditions.append(MarketTopic.label.ilike(like))
-
-    # Media scope: early-signal clusters are Shorts by definition. Broad market
-    # topics qualify only when they have at least one member of the chosen type.
-    if scope == "shorts":
-        market_conditions.append(
-            exists().where(
-                MarketTopicMembership.market_topic_id == MarketTopic.id,
-                MarketTopicMembership.market_video_id == MarketVideo.id,
-                MarketVideo.shorts_status == "VERIFIED_SHORTS",
-            )
-        )
-    elif scope == "videos":
-        market_conditions.append(
-            exists().where(
-                MarketTopicMembership.market_topic_id == MarketTopic.id,
-                MarketTopicMembership.market_video_id == MarketVideo.id,
-                MarketVideo.shorts_status == "REJECTED_NOT_SHORTS",
-            )
-        )
-
     period_cutoff = datetime.now(UTC) - timedelta(hours={"today": 24, "7d": 168, "30d": 720}[period])
 
-    # Top-K merge pagination: fetch only offset+limit per source ordered by the
-    # same key used for the final merge, then merge-sort and slice. Any row in
-    # the overall top-(offset+limit) must be inside its own source top-K, so
-    # this is exact without loading every row.
-    window = offset + limit
+    # Search and pagination are presentation operations. The expensive ranking
+    # is shared by every request for the same scope/period, and a search must
+    # never renormalize a topic's score against only its matching results.
+    cached_core = _read_topic_pool_cache(scope, period)
+    if cached_core is not None:
+        return _topic_pool_response(
+            cached_core,
+            scope=scope,
+            period=period,
+            search=search,
+            offset=offset,
+            limit=limit,
+            cache_state="hit",
+        )
+
+    # Early-signal clusters contain Shorts by definition. Market topics are
+    # rebuilt from their matching members below, so no combined aggregate can
+    # leak into a Shorts-only or ordinary-video-only leaderboard.
     clusters = [] if scope == "videos" else db.scalars(
         select(TrendCluster)
-        .where(*cluster_conditions)
-        .order_by(desc(TrendCluster.trend_score), desc(TrendCluster.member_count))
-        .limit(window)
+        .where(
+            *cluster_conditions,
+            TrendCluster.last_observed_at.is_not(None),
+            TrendCluster.last_observed_at >= period_cutoff,
+        )
     ).all()
-    market_topics = db.scalars(
-        select(MarketTopic)
-        .where(*market_conditions)
-        .order_by(desc(MarketTopic.trend_score), desc(MarketTopic.member_count))
-        .limit(window)
-    ).all()
-
-    combined = [
-        ("signal", cluster, float(cluster.trend_score or 0), int(cluster.member_count or 0))
-        for cluster in clusters
-    ] + [
-        ("market", topic, float(topic.trend_score or 0), int(topic.member_count or 0))
-        for topic in market_topics
-    ]
-    combined.sort(key=lambda row: (row[2], row[3]), reverse=True)
-    selected = combined[offset:offset + limit]
-
-    total_items = (
-        (0 if scope == "videos" else db.scalar(select(func.count(TrendCluster.id)).where(*cluster_conditions)) or 0)
-    ) + (
-        db.scalar(select(func.count(MarketTopic.id)).where(*market_conditions)) or 0
+    market_items = _scoped_market_topic_items(
+        db,
+        market_conditions,
+        scope=scope,
+        cutoff=period_cutoff,
     )
 
     # Diagnostics stay a health summary, independent of search and pagination.
@@ -1908,38 +2182,45 @@ def list_youtube_topic_pool(
         )
     ) or 0
 
-    # Pipeline diagnostics for ordinary (non-Short) videos: stored, fingerprinted,
-    # semantically understood, clustered, and still waiting for the AI.
+    # Pipeline diagnostics follow the selected media scope as well. Otherwise a
+    # Shorts screen can misleadingly report ordinary-video pipeline totals.
+    scoped_video_conditions = []
+    if scope == "shorts":
+        scoped_video_conditions.append(MarketVideo.shorts_status == "VERIFIED_SHORTS")
+    elif scope == "videos":
+        scoped_video_conditions.append(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+    else:
+        scoped_video_conditions.append(
+            MarketVideo.shorts_status.in_(("VERIFIED_SHORTS", "REJECTED_NOT_SHORTS"))
+        )
     stored_scope_videos = db.scalar(
-        select(func.count(MarketVideo.id)).where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+        select(func.count(MarketVideo.id)).where(*scoped_video_conditions)
     ) or 0
     featured_scope_videos = db.scalar(
         select(func.count(MarketVideoFeature.id))
         .join(MarketVideo, MarketVideo.id == MarketVideoFeature.market_video_id)
-        .where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+        .where(*scoped_video_conditions)
     ) or 0
     semantic_scope_videos = db.scalar(
         select(func.count(MarketVideoFeature.id))
         .join(MarketVideo, MarketVideo.id == MarketVideoFeature.market_video_id)
         .where(
-            MarketVideo.shorts_status == "REJECTED_NOT_SHORTS",
+            *scoped_video_conditions,
             MarketVideoFeature.feature_model == "market-semantic-v6",
         )
     ) or 0
     clustered_scope_videos = db.scalar(
         select(func.count(MarketTopicMembership.market_video_id.distinct()))
         .join(MarketVideo, MarketVideo.id == MarketTopicMembership.market_video_id)
-        .where(MarketVideo.shorts_status == "REJECTED_NOT_SHORTS")
+        .where(*scoped_video_conditions)
     ) or 0
     pending_semantic_videos = max(0, stored_scope_videos - semantic_scope_videos)
 
-    # Batch-load members and snapshots for the selected slice so a page runs a
-    # fixed number of queries instead of one round-trip per topic.
-    signal_ids = [row.id for source_type, row, _velocity, _members in selected if source_type == "signal"]
-    market_ids = [row.id for source_type, row, _velocity, _members in selected if source_type == "market"]
-
-    signal_members = {}
-    signal_snapshots = {}
+    # Batch-load all eligible early-signal evidence before the common scoped
+    # ranking pass. Market evidence was already rebuilt by media type above.
+    signal_ids = [cluster.id for cluster in clusters]
+    signal_members: dict = {}
+    signal_snapshots: dict = {}
     if signal_ids:
         for snipe, membership in db.execute(
             select(YoutubeSnipe, TrendMembership)
@@ -1955,77 +2236,29 @@ def list_youtube_topic_pool(
         ).all():
             signal_snapshots.setdefault(snapshot.cluster_id, []).append(snapshot)
 
-    market_members = {}
-    market_snapshots = {}
-    if market_ids:
-        for video, membership in db.execute(
-            select(MarketVideo, MarketTopicMembership)
-            .join(MarketTopicMembership, MarketTopicMembership.market_video_id == MarketVideo.id)
-            .where(MarketTopicMembership.market_topic_id.in_(market_ids))
-        ).all():
-            market_members.setdefault(membership.market_topic_id, []).append(video)
-        for snapshot in db.scalars(
-            select(MarketTopicSnapshot)
-            .where(MarketTopicSnapshot.market_topic_id.in_(market_ids))
-            .order_by(desc(MarketTopicSnapshot.observed_at))
-        ).all():
-            market_snapshots.setdefault(snapshot.market_topic_id, []).append(snapshot)
+    candidates: list[dict] = list(market_items)
+    for cluster in clusters:
+        payload = _trend_payload(
+            db, cluster, member_limit=8, snapshot_limit=10, full_evidence_totals=True,
+            prefetched_members=signal_members.get(cluster.id, []),
+            prefetched_snapshots=signal_snapshots.get(cluster.id, []),
+        )
+        payload["detail_href"] = f"/youtube/trends/{cluster.id}?from=topic-pool&scope={scope}&period={period}"
+        payload["source_type"] = "early_signal"
+        payload["media_mix"] = {"shorts": payload.get("member_count", 0), "videos": 0}
+        payload["organic_velocity_per_hour"] = payload.get("observed_velocity_per_hour", 0)
+        payload["period_growth_views"] = _period_growth_views(signal_snapshots.get(cluster.id, []), period_cutoff)
+        payload["_region_count"] = (payload.get("human_summary") or {}).get("region_count", 0)
+        candidates.append(payload)
 
-    items = []
-    for source_type, row, _velocity, _members in selected:
-        if source_type == "signal":
-            payload = _trend_payload(
-                db, row, member_limit=8, snapshot_limit=10, full_evidence_totals=True,
-                prefetched_members=signal_members.get(row.id, []),
-                prefetched_snapshots=signal_snapshots.get(row.id, []),
-            )
-            payload["detail_href"] = f"/youtube/trends/{row.id}?from=topic-pool"
-            payload["source_type"] = "early_signal"
-            payload["media_mix"] = {"shorts": payload.get("member_count", 0), "videos": 0}
-            payload["ranking_score"] = payload.get("trend_score", 0)
-            payload["period_growth_views"] = _period_growth_views(signal_snapshots.get(row.id, []), period_cutoff)
-            items.append(payload)
-            continue
-        topic = row
-        all_market_members = market_members.get(topic.id, [])
-        media_mix = {
-            "shorts": sum(1 for v in all_market_members if v.shorts_status == "VERIFIED_SHORTS"),
-            "videos": sum(1 for v in all_market_members if v.shorts_status == "REJECTED_NOT_SHORTS"),
-        }
-        members = all_market_members[:8]
-        snapshots = list(reversed(market_snapshots.get(topic.id, [])[:10]))
-        items.append({
-            "id": f"market-{topic.id}",
-            "detail_href": f"/youtube/trends/market/{topic.id}",
-            "source_type": "market_video",
-            "label": topic.label,
-            "niche": None,
-            "status": topic.status,
-            "observed_views": topic.observed_views,
-            "observed_velocity_per_hour": topic.observed_velocity_per_hour,
-            "member_count": topic.member_count,
-            "channel_count": topic.channel_count,
-            "members": [{
-                "video_id": video.video_id,
-                "thumbnail_url": video.thumbnail_url,
-                "current_view_count": None,
-            } for video in members],
-            "snapshots": [{
-                "observed_velocity_per_hour": snapshot.observed_velocity_per_hour,
-            } for snapshot in snapshots],
-            "media_mix": media_mix,
-            "ranking_score": topic.trend_score,
-            "period_growth_views": _period_growth_views(market_snapshots.get(topic.id, []), period_cutoff),
-            "human_summary": None,
-        })
-    return {
-        "items": items,
-        "total_items": total_items,
-        "offset": offset,
-        "limit": limit,
-        "scope": scope,
-        "period": period,
-        "has_more": offset + len(items) < total_items,
+    for item in market_items:
+        item["detail_href"] = f'{item["detail_href"]}&period={period}'
+
+    ranked_items = [_topic_pool_list_item(item) for item in _rank_scoped_topic_pool(candidates)]
+    methodology = "Every media and period filter rebuilds evidence counts, views, organic growth, momentum, and ranking from matching verified-format videos only. A topic needs at least two matching videos from two creators; combined aggregates never leak into a scoped leaderboard."
+    core = {
+        "items": ranked_items,
+        "generated_at": datetime.now(UTC).isoformat(),
         "diagnostics": {
             "public_topics": public_count,
             "candidate_topics": candidate_count,
@@ -2038,8 +2271,18 @@ def list_youtube_topic_pool(
             "clustered_scope_videos": clustered_scope_videos,
             "pending_semantic_videos": pending_semantic_videos,
         },
-        "methodology": "This topic pool combines multi-video candidates from the early-signal and broad-market lanes. Single-video rows remain stored but are not presented as a topic.",
+        "methodology": methodology,
     }
+    _write_topic_pool_cache(scope, period, core)
+    return _topic_pool_response(
+        core,
+        scope=scope,
+        period=period,
+        search=search,
+        offset=offset,
+        limit=limit,
+        cache_state="miss",
+    )
 
 
 
