@@ -2101,6 +2101,7 @@ def list_youtube_topic_pool(
     q: str | None = Query(default=None, max_length=120),
     scope: str = Query(default="combined", pattern="^(shorts|videos|combined)$"),
     period: str = Query(default="7d", pattern="^(today|7d|30d)$"),
+    category: str | None = Query(default=None, max_length=4),
     db: Session = Depends(get_db),
 ) -> dict:
     """A broader, less strict view of observed topic clusters.
@@ -2108,7 +2109,11 @@ def list_youtube_topic_pool(
     This endpoint is intentionally separate from the public leaderboard so the
     main trends page can stay strict while a companion page surfaces weaker but
     useful candidates for exploration and debugging.
+
+    The optional category filter rebuilds every topic's evidence from members
+    of that YouTube category only, mirroring how the media-scope filter works.
     """
+    category = category.strip() if category and category.strip() else None
     cluster_conditions = [
         TrendCluster.status != "MERGED",
         TrendCluster.member_count >= 2,
@@ -2126,7 +2131,7 @@ def list_youtube_topic_pool(
     # Search and pagination are presentation operations. The expensive ranking
     # is shared by every request for the same scope/period, and a search must
     # never renormalize a topic's score against only its matching results.
-    cached_core = _read_topic_pool_cache(scope, period)
+    cached_core = _read_topic_pool_cache(scope, period, category)
     if cached_core is not None:
         return _topic_pool_response(
             cached_core,
@@ -2136,12 +2141,15 @@ def list_youtube_topic_pool(
             offset=offset,
             limit=limit,
             cache_state="hit",
+            category=category,
         )
 
     # Early-signal clusters contain Shorts by definition. Market topics are
     # rebuilt from their matching members below, so no combined aggregate can
     # leak into a Shorts-only or ordinary-video-only leaderboard.
-    clusters = [] if scope == "videos" else db.scalars(
+    # Early-signal snipes carry no YouTube category, so a category filter
+    # narrows to category-tagged market evidence instead of guessing.
+    clusters = [] if scope == "videos" or category else db.scalars(
         select(TrendCluster)
         .where(
             *cluster_conditions,
