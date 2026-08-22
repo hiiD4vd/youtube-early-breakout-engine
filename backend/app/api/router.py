@@ -2008,6 +2008,23 @@ def _scoped_market_topic_items(
         evidence = sorted(members, key=lambda video: member_views.get(video.id, 0), reverse=True)
         movement = "RISING" if period_growth > 0 and organic_velocity > 0 else "COLLECTING_HISTORY"
         topic = topic_by_id[topic_id]
+
+        # Category purity check for the selected category tab. YouTube
+        # categories come from the uploader, not the content: GTA videos
+        # uploaded by music channels appear in the Music tab at the DB level.
+        # A dominant-category test is fragile on mixed topics (a 8-vs-7 split
+        # flips "dominant"), so instead the selected category must hold a
+        # clear majority of the topic's categorised members. Ties and
+        # near-ties are demoted; only genuinely on-category topics rank.
+        off_category = False
+        category_share = 1.0
+        if category:
+            census = category_rows.get(topic_id, {})
+            census_total = sum(census.values())
+            selected_count = census.get(category, 0)
+            category_share = (selected_count / census_total) if census_total else 1.0
+            off_category = census_total > 0 and category_share < 0.6
+
         items.append({
             "id": f"market-{topic.id}",
             "detail_href": f"/youtube/trends/market/{topic.id}?scope={scope}",
@@ -2037,23 +2054,49 @@ def _scoped_market_topic_items(
             },
             "_region_count": len(regions),
             "_fresh_ratio": fresh_count / max(1, len(members)),
+            "_off_category": off_category,
+            "_category_share": round(category_share, 3),
         })
     return items
 
 
-def _rank_scoped_topic_pool(items: list[dict]) -> list[dict]:
-    """Create one comparable, scope-local score for both topic sources."""
+def _rank_scoped_topic_pool(items: list[dict], *, category_mode: bool = False) -> list[dict]:
+    """Create one comparable, scope-local score for both topic sources.
+
+    In category mode, growth and momentum are compared per video instead of in
+    aggregate. A 400-video umbrella topic only outranks a tight 4-video topic
+    because it is big; per-video comparison surfaces what is actually spiking
+    inside the selected category, which is what a category tab is for.
+    """
     if not items:
         return items
 
-    max_growth = max((int(item.get("period_growth_views") or 0) for item in items), default=0)
-    max_velocity = max((float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0) for item in items), default=0)
+    if category_mode:
+        # Normalise volume signals per member before the shared ranking pass.
+        for item in items:
+            members = max(1, int(item.get("member_count") or 1))
+            item["_per_member_growth"] = max(0, int(item.get("period_growth_views") or 0)) / members
+            item["_per_member_velocity"] = max(
+                0.0,
+                float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0),
+            ) / members
+        growth_source = "_per_member_growth"
+        velocity_source = "_per_member_velocity"
+    else:
+        growth_source = "period_growth_views"
+        velocity_source = None
+
+    max_growth = max((float(item.get(growth_source) or 0) for item in items), default=0)
+    if velocity_source:
+        max_velocity = max((float(item.get(velocity_source) or 0) for item in items), default=0)
+    else:
+        max_velocity = max((float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0) for item in items), default=0)
     max_channels = max((int(item.get("channel_count") or 0) for item in items), default=0)
     max_regions = max((int(item.get("_region_count") or (item.get("human_summary") or {}).get("region_count") or 0) for item in items), default=0)
 
     for item in items:
-        growth = max(0, int(item.get("period_growth_views") or 0))
-        velocity = max(0.0, float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0))
+        growth = max(0, float(item.get(growth_source) or 0))
+        velocity = max(0.0, float(item.get(velocity_source) or item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0)) if velocity_source else max(0.0, float(item.get("organic_velocity_per_hour") or item.get("observed_velocity_per_hour") or 0))
         channels = max(0, int(item.get("channel_count") or 0))
         regions = max(0, int(item.get("_region_count") or (item.get("human_summary") or {}).get("region_count") or 0))
         fresh_ratio = float(item.get("_fresh_ratio") or 0)
