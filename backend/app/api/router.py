@@ -2154,6 +2154,7 @@ def list_youtube_topic_pool(
         market_conditions,
         scope=scope,
         cutoff=period_cutoff,
+        category=category,
     )
 
     # Diagnostics stay a health summary, independent of search and pagination.
@@ -2254,8 +2255,15 @@ def list_youtube_topic_pool(
     for item in market_items:
         item["detail_href"] = f'{item["detail_href"]}&period={period}'
 
-    ranked_items = [_topic_pool_list_item(item) for item in _rank_scoped_topic_pool(candidates)]
-    methodology = "Every media and period filter rebuilds evidence counts, views, organic growth, momentum, and ranking from matching verified-format videos only. A topic needs at least two matching videos from two creators; combined aggregates never leak into a scoped leaderboard."
+    ranked_items = [_topic_pool_list_item(item) for item in _rank_scoped_topic_pool(candidates, category_mode=bool(category))]
+    if category:
+        methodology = (
+            f"Saat satu kategori dipilih, kenaikan views dan momentum dihitung per video, bukan gabungan. "
+            "Topik raksasa tidak menang hanya karena banyak videonya; yang naik adalah topik yang videonya benar-benar sedang meledak di kategori ini. "
+            "Tab semua kategori tetap memakai peringkat gabungan."
+        )
+    else:
+        methodology = "Every media and period filter rebuilds evidence counts, views, organic growth, momentum, and ranking from matching verified-format videos only. A topic needs at least two matching videos from two creators; combined aggregates never leak into a scoped leaderboard."
     core = {
         "items": ranked_items,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -2273,7 +2281,7 @@ def list_youtube_topic_pool(
         },
         "methodology": methodology,
     }
-    _write_topic_pool_cache(scope, period, core)
+    _write_topic_pool_cache(scope, period, core, category)
     return _topic_pool_response(
         core,
         scope=scope,
