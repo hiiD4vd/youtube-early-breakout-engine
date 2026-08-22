@@ -2282,8 +2282,59 @@ def list_youtube_topic_pool(
         offset=offset,
         limit=limit,
         cache_state="miss",
+        category=category,
     )
 
+
+
+EARLY_TOPIC_LIVE_PHASES = {"FRESH", "RISING", "VALIDATING"}
+EARLY_TOPIC_SEMANTIC_SOURCES = {"market_semantic_provider", "deterministic_format"}
+
+
+def _early_topic_eligibility(cluster: TrendCluster) -> tuple[bool, list[str]]:
+    """Return stable Early Topic eligibility independently of public trend status.
+
+    Early Topic Signals are predictive candidates. Requiring the lifecycle
+    status used by the confirmed-trends board made otherwise valid candidates
+    blink in and out whenever the scorer changed PRIVATE/EMERGING/COOLING.
+    The early board instead follows its own 72-hour evidence contract.
+    """
+    summary = cluster.evidence_summary or {}
+    metadata = cluster.model_metadata or {}
+    reasons: list[str] = []
+
+    phase = summary.get("early_phase")
+    lifecycle_age = summary.get("lifecycle_age_hours")
+    if phase not in EARLY_TOPIC_LIVE_PHASES:
+        reasons.append("outside_live_phase")
+    if lifecycle_age is None or lifecycle_age > settings.early_topic_lifecycle_hours:
+        reasons.append("outside_lifecycle_window")
+    if summary.get("early_member_count", 0) < 2:
+        reasons.append("insufficient_early_members")
+    if summary.get("early_channel_count", 0) < 2:
+        reasons.append("insufficient_early_channels")
+
+    label = (cluster.label or "").strip()
+    if not label or label.casefold() in NON_FOLLOWABLE_TOPIC_LABELS:
+        reasons.append("non_followable_label")
+    if (cluster.label_confidence or 0) < .70:
+        reasons.append("low_label_confidence")
+    if metadata.get("followable") is False:
+        reasons.append("provider_rejected_label")
+
+    # Legacy early naming and the newer semantic grouping pipeline are both
+    # valid producers of a reviewed topic identity. The previous endpoint
+    # recognized only the legacy flag, although new clusters already carried
+    # a provider-reviewed label, confidence and followable decision.
+    semantic_ready = bool(
+        metadata.get("early_topic_named")
+        or metadata.get("semantic_grouping")
+        or metadata.get("source") in EARLY_TOPIC_SEMANTIC_SOURCES
+    )
+    if not semantic_ready:
+        reasons.append("semantic_identity_pending")
+
+    return not reasons, reasons
 
 
 @api_router.get("/youtube/early-topics")
@@ -2299,18 +2350,20 @@ def list_early_topic_signals(
     """
     all_clusters = db.scalars(select(TrendCluster).where(TrendCluster.status != "MERGED")).all()
     clusters = sorted(
-        (cluster for cluster in all_clusters if cluster.status in PUBLIC_TREND_STATUSES),
+        all_clusters,
         key=lambda cluster: (cluster.trend_score, cluster.last_observed_at or cluster.first_detected_at),
         reverse=True,
     )[:100]
     items = []
+    rejection_counts: dict[str, int] = {}
     for cluster in clusters:
+        eligible, rejection_reasons = _early_topic_eligibility(cluster)
+        if not eligible:
+            for reason in rejection_reasons:
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+            continue
         summary = cluster.evidence_summary or {}
         metadata = cluster.model_metadata or {}
-        if summary.get("early_member_count", 0) < 2 or summary.get("early_channel_count", 0) < 2:
-            continue
-        if not metadata.get("early_topic_named") or (cluster.label_confidence or 0) < .70:
-            continue
         payload = _trend_payload(db, cluster)
         payload["prediction_state"] = (metadata.get("outcome") or {}).get("state", "PENDING")
         payload["early_member_count"] = summary.get("early_member_count", 0)
@@ -2330,8 +2383,19 @@ def list_early_topic_signals(
             if (cluster.evidence_summary or {}).get("early_member_count", 0) >= 2
             and (cluster.evidence_summary or {}).get("early_channel_count", 0) >= 2
         ),
-        "named_candidates": sum(1 for cluster in live_early_clusters if (cluster.model_metadata or {}).get("early_topic_named")),
+        "named_candidates": sum(
+            1 for cluster in live_early_clusters
+            if (
+                (cluster.model_metadata or {}).get("early_topic_named")
+                or (cluster.model_metadata or {}).get("semantic_grouping")
+                or (cluster.model_metadata or {}).get("source") in EARLY_TOPIC_SEMANTIC_SOURCES
+            )
+            and (cluster.label_confidence or 0) >= .70
+            and (cluster.model_metadata or {}).get("followable") is not False
+        ),
         "public_topics": len(items),
+        "eligible_topics": len(items),
+        "rejection_counts": rejection_counts,
     }
     return {"items": items[:limit], "diagnostics": diagnostics, "methodology": "Early Topic Signals require at least two fresh, low-view Shorts from two independent channels. Channel size is recorded for analysis but never used as a gate. A later match to Market Trending Topics is stored as an auditable outcome for calibration; it does not automatically change rules."}
 
