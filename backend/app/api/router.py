@@ -2067,21 +2067,58 @@ def _rank_scoped_topic_pool(items: list[dict]) -> list[dict]:
         region_component = 10 * (regions / max_regions if max_regions else 0)
         freshness_component = 10 * min(1.0, fresh_ratio)
         score = growth_component + velocity_component + creator_component + region_component + freshness_component
+
+        size_note = ""
+        if category_mode:
+            # A category tab answers "what specifically is spiking here".
+            # Topics spanning dozens-to-hundreds of videos are umbrellas that
+            # describe the whole category, not a specific viral thing, so they
+            # are dragged down (never hidden) with a documented size penalty.
+            members = max(1, int(item.get("member_count") or 1))
+            size_penalty = 0.4 * min(1.0, max(0.0, (log1p(members) - log1p(40)) / (log1p(400) - log1p(40))))
+            if size_penalty > 0.05:
+                size_note = " Topik sangat luas, diturunkan otomatis."
+            score = score * (1 - size_penalty)
+
+            # Off-category guard: the topic's dominant category differs from
+            # the selected tab (uploader miscategorised the videos). Demote it
+            # hard — it belongs on the other tab.
+            if item.get("_off_category"):
+                score = score * 0.25
+                size_note = " Video di topik ini sebagian besar berkategori lain."
         item["ranking_score"] = round(score, 2)
 
-        strongest = max(
-            (
-                (growth_component, f"naik {growth:,} views dari video yang sudah ada di pilihan ini"),
-                (velocity_component, f"momentum {velocity:,.0f} views/jam pada pilihan ini"),
-                (creator_component, f"dibuktikan oleh {channels} kreator pada pilihan ini"),
-                (region_component, f"terlihat di {regions} wilayah pada pilihan ini"),
-                (freshness_component, "bukti videonya masih baru"),
-            ),
-            key=lambda value: value[0],
-        )[1]
-        item["ranking_reason"] = f"Peringkat scope ini terutama karena {strongest}."
+        if category_mode:
+            members = max(1, int(item.get("member_count") or 1))
+            strongest = max(
+                (
+                    (growth_component, f"naik {int(growth * members):,} views ({growth:,.0f}/video) di kategori ini"),
+                    (velocity_component, f"momentum {velocity:,.0f} views/jam per video di kategori ini"),
+                    (creator_component, f"dibuktikan oleh {channels} kreator di kategori ini"),
+                    (region_component, f"terlihat di {regions} wilayah di kategori ini"),
+                    (freshness_component, "bukti videonya masih baru"),
+                ),
+                key=lambda value: value[0],
+            )[1]
+            item["ranking_reason"] = f"Peringkat kategori ini terutama karena {strongest}.{size_note}"
+        else:
+            strongest = max(
+                (
+                    (growth_component, f"naik {int(growth):,} views dari video yang sudah ada di pilihan ini"),
+                    (velocity_component, f"momentum {velocity:,.0f} views/jam pada pilihan ini"),
+                    (creator_component, f"dibuktikan oleh {channels} kreator pada pilihan ini"),
+                    (region_component, f"terlihat di {regions} wilayah pada pilihan ini"),
+                    (freshness_component, "bukti videonya masih baru"),
+                ),
+                key=lambda value: value[0],
+            )[1]
+            item["ranking_reason"] = f"Peringkat scope ini terutama karena {strongest}."
         item.pop("_region_count", None)
         item.pop("_fresh_ratio", None)
+        item.pop("_per_member_growth", None)
+        item.pop("_per_member_velocity", None)
+        item.pop("_off_category", None)
+        item.pop("_category_share", None)
 
     return sorted(
         items,
