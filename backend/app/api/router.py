@@ -1898,6 +1898,7 @@ def _scoped_market_topic_items(
     *,
     scope: str,
     cutoff: datetime,
+    category: str | None = None,
 ) -> list[dict]:
     """Rebuild topic evidence and movement for one media scope.
 
@@ -1905,6 +1906,10 @@ def _scoped_market_topic_items(
     user selects Shorts-only or ordinary-video-only makes the filter cosmetic:
     a topic dominated by ordinary videos can still rank first in Shorts. This
     helper deliberately derives every displayed metric from matching members.
+
+    When a YouTube category filter is active, evidence is rebuilt from members
+    of that category only, so the category leaderboard is honest the same way
+    the media-scope leaderboard is honest.
     """
     topics = db.scalars(select(MarketTopic).where(*conditions)).all()
     if not topics:
