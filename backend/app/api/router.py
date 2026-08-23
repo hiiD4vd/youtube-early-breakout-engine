@@ -1799,25 +1799,26 @@ def _period_growth_views(snapshots_desc: list, cutoff: datetime) -> int:
     return max(0, latest - baseline)
 
 
-def _topic_pool_cache_key(scope: str, period: str) -> str:
-    return f"ycgc:youtube:topic-pool:{TOPIC_POOL_CACHE_SCHEMA}:{scope}:{period}"
+def _topic_pool_cache_key(scope: str, period: str, category: str | None = None) -> str:
+    category_part = category or "all"
+    return f"ycgc:youtube:topic-pool:{TOPIC_POOL_CACHE_SCHEMA}:{scope}:{period}:{category_part}"
 
 
-def _read_topic_pool_cache(scope: str, period: str) -> dict | None:
+def _read_topic_pool_cache(scope: str, period: str, category: str | None = None) -> dict | None:
     """Read a short-lived leaderboard cache; Redis failure never breaks API."""
     try:
-        raw = SeedStore().client.get(_topic_pool_cache_key(scope, period))
+        raw = SeedStore().client.get(_topic_pool_cache_key(scope, period, category))
         value = json.loads(raw) if raw else None
         return value if isinstance(value, dict) and isinstance(value.get("items"), list) else None
     except Exception:
         return None
 
 
-def _write_topic_pool_cache(scope: str, period: str, payload: dict) -> None:
+def _write_topic_pool_cache(scope: str, period: str, payload: dict, category: str | None = None) -> None:
     """Cache only JSON-safe list data; source evidence remains durable in DB."""
     try:
         SeedStore().client.set(
-            _topic_pool_cache_key(scope, period),
+            _topic_pool_cache_key(scope, period, category),
             json.dumps(jsonable_encoder(payload), separators=(",", ":")),
             ex=max(10, settings.topic_pool_cache_ttl_seconds),
         )
