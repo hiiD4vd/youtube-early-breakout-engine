@@ -1867,6 +1867,7 @@ def _topic_pool_response(
     offset: int,
     limit: int,
     cache_state: str,
+    category: str | None = None,
 ) -> dict:
     ranked_items = core.get("items") or []
     if search:
@@ -1881,6 +1882,7 @@ def _topic_pool_response(
         "limit": limit,
         "scope": scope,
         "period": period,
+        "category": category,
         "has_more": offset + len(items) < total_items,
         "diagnostics": core.get("diagnostics") or {},
         "cache": {
