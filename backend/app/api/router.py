@@ -1927,6 +1927,17 @@ def _scoped_market_topic_items(
             MarketVideo.shorts_status.in_(("VERIFIED_SHORTS", "REJECTED_NOT_SHORTS"))
         )
 
+    if category:
+        membership_stmt = membership_stmt.where(MarketVideo.category_id == category)
+
+    # Category purity: YouTube categories come from the uploader, not the
+    # content. A GTA topic whose members were uploaded by music channels
+    # legitimately appears in both the Music and Gaming tabs at the database
+    # level. But inside a single category tab the topic must actually be about
+    # that category, so we also load every member's category to derive each
+    # topic's dominant category below.
+    category_rows: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
     # Use the video id as the evidence identity. Even if a malformed or legacy
     # membership row is duplicated, it must never inflate the scoped rank.
     members_by_topic: dict[int, dict[int, MarketVideo]] = defaultdict(dict)
@@ -1936,6 +1947,21 @@ def _scoped_market_topic_items(
         video_ids.add(video.id)
     if not video_ids:
         return []
+
+    if category:
+        # Full-category census for every candidate topic, not just members
+        # matching the selected category, so the dominant category reflects
+        # the topic as a whole.
+        for topic_id, member_category in db.execute(
+            select(
+                MarketTopicMembership.market_topic_id,
+                MarketVideo.category_id,
+            )
+            .join(MarketVideo, MarketVideo.id == MarketTopicMembership.market_video_id)
+            .where(MarketTopicMembership.market_topic_id.in_(members_by_topic))
+        ).all():
+            if member_category:
+                category_rows[topic_id][member_category] += 1
 
     observation_rows = db.execute(
         select(
