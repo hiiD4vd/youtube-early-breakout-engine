@@ -54,7 +54,7 @@ def _verify(video_id: str) -> tuple[str, dict]:
     if 0 < duration <= 180 and width > 0 and height >= width:
         # Piggyback the caption fetch here so the semantic enrichment never
         # re-downloads it: one verification pass yields dimensions + transcript.
-        transcript = fetch_transcript(f"https://www.youtube.com/watch?v={video_id}", timeout=60)
+        transcript = fetch_transcript(f"https://www.youtube.com/watch?v={video_id}", timeout=30)
         if transcript:
             evidence["transcript"] = transcript
         return "VERIFIED_SHORTS", evidence
