@@ -60,7 +60,7 @@ def _semantic_request(client: MarketSemanticClient, video: MarketVideo):
         if stored:
             transcript = stored
         elif video.video_url:
-            transcript = fetch_transcript(video.video_url)
+            transcript = fetch_transcript(video.video_url, timeout=30)
     return client.analyze(video.title or "", video.description, transcript)
 
 
