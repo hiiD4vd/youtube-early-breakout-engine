@@ -12,7 +12,7 @@ celery_app = Celery(
     "ycgc_v4",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_latest_tasks", "app.tasks.market_shorts_tasks", "app.tasks.market_feed_tasks", "app.tasks.market_feature_tasks", "app.tasks.market_gemini_tasks", "app.tasks.market_cluster_tasks", "app.tasks.market_topic_scoring_tasks", "app.tasks.market_fallback_topics_tasks", "app.tasks.market_metadata_tasks", "app.tasks.market_semantic_topic_tasks", "app.tasks.market_trending_topics_tasks", "app.tasks.market_content_truth_tasks", "app.tasks.market_apify_tasks", "app.tasks.youtube_general_tasks", "app.tasks.external_benchmark_tasks"],
+    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_latest_tasks", "app.tasks.market_shorts_tasks", "app.tasks.market_feed_tasks", "app.tasks.market_feature_tasks", "app.tasks.market_gemini_tasks", "app.tasks.market_cluster_tasks", "app.tasks.market_topic_dedupe_tasks", "app.tasks.market_topic_retitle_tasks", "app.tasks.market_topic_scoring_tasks", "app.tasks.market_fallback_topics_tasks", "app.tasks.market_metadata_tasks", "app.tasks.market_semantic_topic_tasks", "app.tasks.market_trending_topics_tasks", "app.tasks.market_content_truth_tasks", "app.tasks.market_apify_tasks", "app.tasks.youtube_general_tasks", "app.tasks.external_benchmark_tasks"],
 )
 celery_app.conf.update(
     timezone="UTC",
@@ -30,6 +30,7 @@ celery_app.conf.update(
         "app.tasks.market_trending_topics_tasks.build_trending_topics": {"queue": "intelligence"},
         "app.tasks.market_content_truth_tasks.audit_market_content_truth": {"queue": "intelligence"},
         "app.tasks.external_benchmark_tasks.match_external_benchmarks": {"queue": "intelligence"},
+        "app.tasks.market_topic_retitle_tasks.retitle_generic_market_topics": {"queue": "intelligence"},
     },
     beat_schedule={
         "discover-anonymous-youtube-shorts-seeds": {
@@ -90,6 +91,8 @@ celery_app.conf.update(
         # AI queue. It enriches evidence only; cross-channel rules still decide
         # whether a candidate becomes a public topic.
         ,"cluster-market-shorts-topics": {"task":"app.tasks.market_cluster_tasks.cluster_market_topics","schedule":600}
+        ,"merge-duplicate-market-topics": {"task":"app.tasks.market_topic_dedupe_tasks.merge_duplicate_market_topics","schedule":600}
+        ,"retitle-generic-market-topics": {"task":"app.tasks.market_topic_retitle_tasks.retitle_generic_market_topics","schedule":1800}
         ,"score-market-shorts-topics": {"task":"app.tasks.market_topic_scoring_tasks.score_market_topics","schedule":600}
         ,"build-market-title-overlap-candidates": {"task":"app.tasks.market_fallback_topics_tasks.build_title_overlap_candidates","schedule":600}
         ,"detect-market-metadata-bursts": {"task":"app.tasks.market_metadata_tasks.detect_market_metadata_bursts","schedule":900}
