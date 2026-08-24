@@ -80,11 +80,24 @@ class MarketSemanticClient:
         transcript_block = (transcript or "").strip()
         transcript_hint = f"\nTranscript: {transcript_block[:4000]}" if transcript_block else "\nTranscript: [No transcript available]"
         prompt = f"""Extract an auditable semantic fingerprint for one YouTube Short.
-Use the title, description, and transcript (when present). Treat the transcript as the ground truth for what the video actually shows; a clickbait title must never override it. Do not invent a film, event, or relationship from names alone. Ignore copyright text, URLs, generic hashtags, and channel branding.
-Return exactly JSON with: topic_label, topic_type, entities, event_context, content_format, topic_theme, theme_confidence, summary, confidence.
-event_context is empty unless explicitly supported. entities are explicit named people, teams, films, products, places, or events.
-topic_theme is a broader human-followable conversation group supported by this Short, for example "football player highlights and fan clips", "celebrity interviews and trivia", or "satisfying craft videos". It must not be a bare generic word such as Sports, Music, Funny, or Viral. Leave it empty when no honest broad theme is possible. Reuse the exact same phrase whenever two Shorts belong to the same conversation group; never invent near-duplicate variants or append noise qualifiers like "and fan clips".
-Title: {title}\nDescription: {description or ''}{transcript_hint}"""
+
+Use the title, description, and transcript (when present). Treat the transcript as ground truth for what the video actually shows; a clickbait title must never override it. Do not invent a film, event, or relationship from names alone. Ignore copyright text, URLs, generic hashtags, and channel branding.
+
+Return exactly JSON with these fields:
+- topic_label — the specific subject of THIS video as a short concrete noun phrase (max ~80 chars). Example: "Erling Haaland hat-trick in the Manchester derby".
+- topic_type — exactly ONE value from this fixed list: format_ranking, format_what_if, animals, sports, gaming, food, diy, event, other. Pick the single axis that best classifies the video.
+- entities — array of explicit named people, teams, films, products, places, or events present in the content. Empty array when none.
+- event_context — empty string unless the content explicitly supports a specific real-world event.
+- content_format — the recognizable FORMAT or mechanic, independent of subject, as a short reusable phrase. Examples: "highlight compilation", "what-if experiment", "satisfying craft", "talking-head commentary", "gameplay clip". Use the EXACT same phrase across videos that share the same mechanic.
+- topic_theme — a broader human-followable conversation group this Short belongs to. A SHORT, SPECIFIC, lowercase noun phrase a person could follow; never a bare generic word (no "Sports", "Music", "Funny", "Viral"). Single subject only — do NOT chain with "and" (write "football player highlights", not "football player highlights and fan clips"). Reuse the EXACT same phrase whenever two Shorts belong to the same conversation group; never invent near-duplicate variants.
+- theme_confidence — 0..1 confidence that topic_theme is honest.
+- summary — a 1-2 sentence factual description of what the video actually shows (max ~360 chars).
+- confidence — 0..1 overall confidence in the fingerprint.
+
+NORMALIZATION: lowercase all labels and themes; no trailing punctuation; no emoji; keep singular/plural consistent.
+
+Title: {title}
+Description: {description or ''}{transcript_hint}"""
         try:
             payload = self._request(prompt)
             self._normalize_confidence(payload)
