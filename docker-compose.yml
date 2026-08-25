@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ycgc}
       POSTGRES_USER: ${POSTGRES_USER:-ycgc}
@@ -17,11 +18,13 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6380:6379"
 
   backend:
     build: ./backend
+    restart: unless-stopped
     env_file: .env
     ports:
       - "8010:8000"
@@ -42,6 +45,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     # Local development uses `npm run dev` from one terminal. Keeping this
     # behind an explicit profile prevents Docker and the host from competing
     # for port 3010 and corrupting the same Next.js chunk cache.
@@ -61,6 +65,7 @@ services:
 
   celery_worker:
     build: ./backend
+    restart: unless-stopped
     env_file: .env
     volumes:
       - ./backend:/app
@@ -76,6 +81,7 @@ services:
 
   celery_intelligence_worker:
     build: ./backend
+    restart: unless-stopped
     env_file: .env
     volumes:
       - ./backend:/app
@@ -89,10 +95,13 @@ services:
         condition: service_started
     # One model request lane keeps costs and provider limits predictable,
     # without blocking the two discovery/verification processes above.
-    command: celery -A app.tasks.celery_app worker --loglevel=info -Q intelligence --concurrency=1
+    # Concurrency > 1 lets enrichment run alongside the long-running
+    # build_trending_topics / recover_rejected tasks instead of queueing behind them.
+    command: celery -A app.tasks.celery_app worker --loglevel=info -Q intelligence --concurrency=2
 
   celery_beat:
     build: ./backend
+    restart: unless-stopped
     env_file: .env
     volumes:
       - ./backend:/app
