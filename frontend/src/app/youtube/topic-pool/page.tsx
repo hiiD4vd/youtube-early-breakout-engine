@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { PageState } from "@/components/page-state";
+import { Skeleton, TopicRowSkeleton } from "@/components/skeleton";
 import { fetcher } from "@/lib/api";
 import { Pagination } from "@/components/pagination";
 
@@ -40,7 +41,18 @@ type Topic = {
 type Scope = "shorts" | "videos" | "combined";
 type Period = "today" | "7d" | "30d";
 type Diagnostics = { stored_scope_videos: number; featured_scope_videos: number; semantic_scope_videos: number; clustered_scope_videos: number; pending_semantic_videos: number };
-type Response = { items: Topic[]; total_items: number; offset: number; limit: number; has_more: boolean; scope: Scope; period: Period; diagnostics?: Diagnostics };
+type Response = { items: Topic[]; total_items: number; offset: number; limit: number; has_more: boolean; scope: Scope; period: Period; category?: string | null; diagnostics?: Diagnostics };
+
+const categoryOptions: Array<[string, string]> = [
+  ["", "Semua kategori"],
+  ["10", "Musik"],
+  ["20", "Gaming"],
+  ["22", "Orang & Vlog"],
+  ["24", "Hiburan"],
+  ["17", "Olahraga"],
+  ["23", "Komedi"],
+  ["1", "Film & Animasi"],
+];
 
 const compact = new Intl.NumberFormat("id-ID", {
   notation: "compact",
@@ -84,11 +96,12 @@ export default function TopicPoolPage() {
   const [pageSize, setPageSize] = useState(25);
   const [scope, setScope] = useState<Scope>("combined");
   const [period, setPeriod] = useState<Period>("7d");
+  const [category, setCategory] = useState("");
   const offset = (page - 1) * pageSize;
-  const requestKey = `/api/v1/youtube/topic-pool?limit=${pageSize}&offset=${offset}&scope=${scope}&period=${period}${debouncedQuery ? `&q=${encodeURIComponent(debouncedQuery)}` : ""}`;
+  const requestKey = `/api/v1/youtube/topic-pool?limit=${pageSize}&offset=${offset}&scope=${scope}&period=${period}${category ? `&category=${category}` : ""}${debouncedQuery ? `&q=${encodeURIComponent(debouncedQuery)}` : ""}`;
   const { data, error, isLoading } = useSWR<Response>(requestKey, fetcher, { refreshInterval: 60_000, keepPreviousData: false });
 
-  useEffect(() => setPage(1), [scope, period]);
+  useEffect(() => setPage(1), [scope, period, category]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -100,11 +113,54 @@ export default function TopicPoolPage() {
 
   // Never render rows cached for another filter selection. This makes rapid
   // switching deterministic even while the new server response is in flight.
-  const responseMatchesSelection = data?.scope === scope && data?.period === period;
+  const responseMatchesSelection = data?.scope === scope && data?.period === period && (data?.category ?? "") === category;
   const items = responseMatchesSelection ? data.items : [];
 
   if (error) return <PageState title="Topic pool belum dapat dimuat" message="Frontend gagal membaca data calon topik." note="Data yang sudah tersimpan tidak dihapus." tone="error" actionHref="/youtube/report" actionLabel="Cek laporan kesehatan" />;
-  if (isLoading || !data || !responseMatchesSelection) return <PageState title="Menghitung ulang peringkat" message={`Menyiapkan topik untuk ${scope === "shorts" ? "Shorts saja" : scope === "videos" ? "video biasa" : "semua jenis video"} pada periode ${period === "today" ? "hari ini" : period === "30d" ? "30 hari" : "7 hari"}.`} tone="loading" />;
+  if (isLoading || !data || !responseMatchesSelection) {
+    return (
+      <div className="mx-auto max-w-[1500px]" aria-busy="true" aria-label="Memuat topik">
+        <section className="flex flex-wrap items-end justify-between gap-5 border-b border-line pb-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[.18em] text-neon">Eksplorasi topik</p>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight">Topik yang sedang dipantau</h1>
+            <p className="mt-2 text-sm text-text-secondary">Fitur mandiri untuk menjelajahi kelompok video yang membahas hal sama. Pilih format dan periode; sistem menghitung ulang peringkatnya otomatis.</p>
+          </div>
+          <div className="rounded-xl border border-line bg-surface px-4 py-3 text-right">
+            <p className="text-[10px] uppercase tracking-[.14em] text-text-tertiary">Topik ditemukan</p>
+            <Skeleton className="ml-auto mt-2 h-7 w-14" />
+            <Skeleton className="ml-auto mt-2 h-3 w-28" />
+          </div>
+        </section>
+
+        <section className="mt-5 rounded-xl border border-line bg-surface p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-2 text-xs font-semibold uppercase tracking-[.12em] text-text-tertiary">Jenis video</span>
+            {([['combined', 'Gabungan'], ['shorts', 'Shorts saja'], ['videos', 'Video biasa']] as [Scope, string][]).map(([value, label]) => <button key={value} type="button" onClick={() => setScope(value)} className={`rounded-lg px-3 py-2 text-sm transition ${scope === value ? 'bg-neon text-black' : 'border border-line bg-bg-primary text-text-secondary hover:text-white'}`}>{label}</button>)}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="mr-2 text-xs font-semibold uppercase tracking-[.12em] text-text-tertiary">Periode</span>
+            {([['today', 'Hari ini'], ['7d', '7 hari'], ['30d', '30 hari']] as [Period, string][]).map(([value, label]) => <button key={value} type="button" onClick={() => setPeriod(value)} className={`rounded-lg px-3 py-2 text-sm transition ${period === value ? 'bg-neon text-black' : 'border border-line bg-bg-primary text-text-secondary hover:text-white'}`}>{label}</button>)}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="mr-2 text-xs font-semibold uppercase tracking-[.12em] text-text-tertiary">Kategori</span>
+            {categoryOptions.map(([value, label]) => <button key={value || "all"} type="button" onClick={() => setCategory(value)} className={`rounded-lg px-3 py-2 text-sm transition ${category === value ? 'bg-neon text-black' : 'border border-line bg-bg-primary text-text-secondary hover:text-white'}`}>{label}</button>)}
+          </div>
+        </section>
+
+        <section className="mt-4 flex flex-wrap items-center gap-3">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari topik…" className="min-w-[240px] flex-1 rounded-lg border border-line bg-surface px-3 py-2.5 text-sm outline-none focus:border-neon/50" />
+        </section>
+
+        <section className="mt-4 overflow-hidden rounded-xl border border-line bg-surface">
+          <div className="hidden grid-cols-[64px_minmax(260px,1.4fr)_150px_130px_minmax(290px,1fr)] gap-4 border-b border-line bg-white/[.02] px-6 py-3 text-[10px] font-semibold uppercase tracking-[.14em] text-text-tertiary lg:grid">
+            <span>Peringkat</span><span>Topik</span><span>Kenaikan</span><span>Momentum</span><span>Video terkait</span>
+          </div>
+          {Array.from({ length: 8 }).map((_, i) => <TopicRowSkeleton key={i} />)}
+        </section>
+      </div>
+    );
+  }
 
   return <div className="mx-auto max-w-[1500px]">
     <section className="flex flex-wrap items-end justify-between gap-5 border-b border-line pb-5">
@@ -125,7 +181,11 @@ export default function TopicPoolPage() {
         <span className="mr-2 text-xs font-semibold uppercase tracking-[.12em] text-text-tertiary">Periode</span>
         {([['today', 'Hari ini'], ['7d', '7 hari'], ['30d', '30 hari']] as [Period, string][]).map(([value, label]) => <button key={value} type="button" onClick={() => setPeriod(value)} className={`rounded-lg px-3 py-2 text-sm transition ${period === value ? 'bg-neon text-black' : 'border border-line bg-bg-primary text-text-secondary hover:text-white'}`}>{label}</button>)}
       </div>
-      <p className="mt-3 text-xs leading-5 text-text-secondary">Peringkat: 45% kenaikan views nyata, 20% percepatan, 15% kreator baru, 10% sebaran wilayah, dan 10% kebaruan bukti. Total views hanya informasi pendukung.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="mr-2 text-xs font-semibold uppercase tracking-[.12em] text-text-tertiary">Kategori</span>
+        {categoryOptions.map(([value, label]) => <button key={value || "all"} type="button" onClick={() => setCategory(value)} className={`rounded-lg px-3 py-2 text-sm transition ${category === value ? 'bg-neon text-black' : 'border border-line bg-bg-primary text-text-secondary hover:text-white'}`}>{label}</button>)}
+      </div>
+      <p className="mt-3 text-xs leading-5 text-text-secondary">{category ? <>Mode kategori: kenaikan views & momentum dihitung <span className="text-neon">per video</span>, dan topik yang terlalu luas (puluhan-ratusan video) diturunkan otomatis — jadi yang muncul adalah <span className="text-neon">topik spesifik yang benar-benar sedang viral</span> di kategori ini. Tab semua kategori tetap memakai peringkat gabungan.</> : <>Peringkat: 45% kenaikan views nyata, 20% percepatan, 15% kreator baru, 10% sebaran wilayah, dan 10% kebaruan bukti. Total views hanya informasi pendukung.</>}</p>
     </section>
 
     <section className="mt-4 flex flex-wrap items-center gap-3">
