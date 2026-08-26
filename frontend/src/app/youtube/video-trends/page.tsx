@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import { PageState } from "@/components/page-state";
+import { Skeleton } from "@/components/skeleton";
 import { Pagination } from "@/components/pagination";
 
 type Video = {
@@ -179,14 +180,14 @@ function FilterChip({ active, children, onClick }: { active: boolean; children: 
 function LoadingRow() {
   return (
     <div className="grid gap-4 border-b border-line px-5 py-5 last:border-0 lg:grid-cols-[52px_minmax(280px,1.55fr)_145px_145px_minmax(210px,1fr)] lg:items-center lg:px-6">
-      <div className="h-8 w-8 animate-pulse rounded-lg bg-line/30" />
+      <div><Skeleton className="h-8 w-8 rounded-lg" /></div>
       <div className="flex gap-3">
-        <div className="h-16 w-28 shrink-0 animate-pulse rounded-md bg-line/30" />
-        <div className="flex-1 space-y-2"><div className="h-4 w-3/4 animate-pulse rounded bg-line/30" /><div className="h-3 w-1/2 animate-pulse rounded bg-line/30" /></div>
+        <Skeleton className="h-16 w-28 shrink-0" />
+        <div className="flex-1 space-y-2"><Skeleton className="h-4 w-3/4" /><Skeleton className="h-3 w-1/2" /></div>
       </div>
-      <div className="h-9 animate-pulse rounded bg-line/30" />
-      <div className="h-9 animate-pulse rounded bg-line/30" />
-      <div className="h-9 animate-pulse rounded bg-line/30" />
+      <div className="space-y-2"><Skeleton className="h-4 w-16" /><Skeleton className="h-3 w-20" /></div>
+      <div className="space-y-2"><Skeleton className="h-4 w-16" /><Skeleton className="h-3 w-20" /></div>
+      <div className="space-y-2"><Skeleton className="h-4 w-24" /><Skeleton className="h-3 w-28" /></div>
     </div>
   );
 }
