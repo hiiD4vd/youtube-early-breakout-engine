@@ -13,7 +13,7 @@ type Topic = {
   evidence_summary: { early_phase?: string; lifecycle_age_hours?: number; lifecycle_window_hours?: number };
   members: Evidence[]; snapshots: Snapshot[];
 };
-type Response = { items: Topic[]; diagnostics?: { active_seeds: number; clusters_observed: number; cross_channel_candidates: number; named_candidates: number; public_topics: number } };
+type Response = { items: Topic[]; diagnostics?: { active_seeds: number; clusters_observed: number; cross_channel_candidates: number; named_candidates: number; public_topics: number; eligible_topics?: number; rejection_counts?: Record<string, number> } };
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
 function Sparkline({ snapshots }: { snapshots: Snapshot[] }) {
@@ -26,7 +26,8 @@ function Sparkline({ snapshots }: { snapshots: Snapshot[] }) {
 
 export default function EarlyTopicsPage() {
   const { data, error } = useSWR<Response>("/api/v1/youtube/early-topics", fetcher, { refreshInterval: 60_000 });
-  if (error) return <PageState title="Early Topic Signals belum dapat dimuat" message="Lapisan sinyal awal belum menerima data yang cukup atau backend belum menjawab permintaan." note="Halaman ini tetap aman; yang gagal hanya pembacaan data, bukan pipeline discovery-nya." tone="error" actionHref="/youtube/report" actionLabel="Lihat laporan observasi" />;
+  // Keep the last successful snapshot visible when one background poll fails.
+  if (error && !data) return <PageState title="Early Topic Signals belum dapat dimuat" message="Lapisan sinyal awal belum menerima data yang cukup atau backend belum menjawab permintaan." note="Halaman ini tetap aman; yang gagal hanya pembacaan data, bukan pipeline discovery-nya." tone="error" actionHref="/youtube/report" actionLabel="Lihat laporan observasi" />;
   if (!data) return <PageState title="Mencari pola baru" message="Sistem sedang menunggu sinyal organik yang masih kecil dan masih baru." note="Topik awal memang tidak langsung banyak; dia harus lewat bukti lintas channel dulu." tone="loading" />;
 
   return <div className="mx-auto max-w-[1500px]">
@@ -37,7 +38,8 @@ export default function EarlyTopicsPage() {
         <div className="rounded-xl border border-line bg-bg-primary/40 px-4 py-3"><p className="text-[10px] uppercase tracking-[.14em] text-text-tertiary">Early topics</p><p className="mt-1 font-mono text-2xl text-neon">{data.items.length}</p></div>
       </div>
     </section>
-    <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["Seeds dipantau", data.diagnostics?.active_seeds ?? 0], ["Cluster diamati", data.diagnostics?.clusters_observed ?? 0], ["Lintas channel", data.diagnostics?.cross_channel_candidates ?? 0], ["Menunggu/siap nama", data.diagnostics?.named_candidates ?? 0], ["Layak tampil", data.diagnostics?.public_topics ?? data.items.length]].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-line bg-surface px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[.13em] text-text-tertiary">{label}</p><p className="mt-1 font-mono text-xl text-neon">{value}</p></div>)}</section>
+    {error && data && <div className="mt-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-xs text-warning">Pembaruan terbaru belum berhasil. Data terakhir yang berhasil dimuat tetap ditampilkan.</div>}
+    <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["Seeds dipantau", data.diagnostics?.active_seeds ?? 0], ["Cluster diamati", data.diagnostics?.clusters_observed ?? 0], ["Lintas channel", data.diagnostics?.cross_channel_candidates ?? 0], ["Identitas semantik", data.diagnostics?.named_candidates ?? 0], ["Layak tampil", data.diagnostics?.eligible_topics ?? data.diagnostics?.public_topics ?? data.items.length]].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-line bg-surface px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[.13em] text-text-tertiary">{label}</p><p className="mt-1 font-mono text-xl text-neon">{value}</p></div>)}</section>
     <section className="mt-5 overflow-hidden rounded-xl border border-line bg-surface">
       <div className="hidden grid-cols-[52px_minmax(260px,1.4fr)_130px_125px_minmax(300px,1fr)] gap-4 border-b border-line bg-white/[.02] px-6 py-3 text-[10px] font-semibold uppercase tracking-[.14em] text-text-tertiary lg:grid"><span>Rank</span><span>Early topic</span><span>Early views</span><span>Movement</span><span>Evidence</span></div>
       {data.items.map((topic, index) => {
