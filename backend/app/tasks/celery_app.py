@@ -12,7 +12,7 @@ celery_app = Celery(
     "ycgc_v4",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_latest_tasks", "app.tasks.market_shorts_tasks", "app.tasks.market_feed_tasks", "app.tasks.market_feature_tasks", "app.tasks.market_gemini_tasks", "app.tasks.market_cluster_tasks", "app.tasks.market_topic_dedupe_tasks", "app.tasks.market_topic_retitle_tasks", "app.tasks.market_topic_scoring_tasks", "app.tasks.market_fallback_topics_tasks", "app.tasks.market_metadata_tasks", "app.tasks.market_semantic_topic_tasks", "app.tasks.market_trending_topics_tasks", "app.tasks.market_content_truth_tasks", "app.tasks.market_apify_tasks", "app.tasks.youtube_general_tasks", "app.tasks.external_benchmark_tasks"],
+    include=["app.tasks.youtube_seed_tasks", "app.tasks.youtube_velocity_tasks", "app.tasks.youtube_enrichment_tasks", "app.tasks.youtube_channel_tasks", "app.tasks.youtube_retry_tasks", "app.tasks.youtube_trend_tasks", "app.tasks.market_trends_tasks", "app.tasks.market_latest_tasks", "app.tasks.market_shorts_tasks", "app.tasks.market_feed_tasks", "app.tasks.market_feature_tasks", "app.tasks.market_gemini_tasks", "app.tasks.market_cluster_tasks", "app.tasks.market_topic_dedupe_tasks", "app.tasks.market_topic_retitle_tasks", "app.tasks.market_topic_scoring_tasks", "app.tasks.market_fallback_topics_tasks", "app.tasks.market_metadata_tasks", "app.tasks.market_semantic_topic_tasks", "app.tasks.market_trending_topics_tasks", "app.tasks.market_content_truth_tasks", "app.tasks.market_apify_tasks", "app.tasks.youtube_general_tasks", "app.tasks.external_benchmark_tasks", "app.tasks.viral_ingest_tasks"],
 )
 celery_app.conf.update(
     timezone="UTC",
@@ -105,6 +105,7 @@ celery_app.conf.update(
         # before an event may remain on the public leaderboard.
         ,"audit-market-content-truth": {"task":"app.tasks.market_content_truth_tasks.audit_market_content_truth","schedule":settings.market_content_truth_interval_minutes * 60}
         ,"match-external-trend-benchmarks": {"task":"app.tasks.external_benchmark_tasks.match_external_benchmarks","schedule":settings.external_benchmark_interval_minutes * 60}
+        ,"viral-ingest-youtube": {"task":"app.tasks.viral_ingest_tasks.send_youtube_to_viral_engine","schedule":900}
     } | (
         {
             "collect-market-apify-shorts": {
