@@ -62,6 +62,31 @@ def _send(items: list[dict]) -> dict:
         return resp.json()
 
 
+def _post(video_id: str, title: str | None, channel: str | None, views: int) -> dict:
+    """Rich related-post object the ViralEngine ingest parser understands.
+
+    Keys match `_extract_posts` / `_cover_from` in the ViralEngine backend:
+      video_id  -> Id/ItemId/video_id
+      caption   -> ItemName/title/caption
+      cover_url -> CoverUrl/cover_url
+      play_count-> PlayCount/play_count
+    Thumbnail is derived from video_id (YouTube CDN) so no backend change
+    and no extra API call is needed.
+    """
+    return {
+        "video_id": video_id,
+        "caption": f"{title or '(tanpa judul)'} — {channel or '?'}",
+        "title": title or "(tanpa judul)",
+        "cover_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        "play_count": int(views or 0),
+        "like_count": 0,
+    }
+
+
+def _thumb(video_id: str) -> str:
+    return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+
 def _topic_pool_items(db) -> list[dict]:
     """Topic Pool → topik tren Shorts yang sudah ter-cluster & ter-score."""
     topics = db.scalars(
@@ -72,15 +97,28 @@ def _topic_pool_items(db) -> list[dict]:
     ).all()
     items = []
     for rank, topic in enumerate(topics, start=1):
-        video_ids = db.scalars(
-            select(MarketVideo.video_id)
-            .join(
-                MarketRankedTopicMembership,
-                MarketRankedTopicMembership.market_video_id == MarketVideo.id,
+        members = db.execute(
+            select(
+                MarketVideo.video_id,
+                MarketVideo.title,
+                MarketVideo.channel_title,
+                MarketVideoObservation.view_count,
+            )
+            .select_from(MarketRankedTopicMembership)
+            .join(MarketVideo, MarketVideo.id == MarketRankedTopicMembership.market_video_id)
+            .outerjoin(
+                MarketVideoObservation,
+                MarketVideoObservation.market_video_id == MarketVideo.id,
             )
             .where(MarketRankedTopicMembership.market_ranked_topic_id == topic.id)
+            .order_by(desc(MarketVideoObservation.view_count))
             .limit(25)
         ).all()
+        related_posts = [
+            _post(mvid, mtitle, mchannel, mviews) for (mvid, mtitle, mchannel, mviews) in members
+        ]
+        # Keep only the bare ids too (related_video_ids) so existing surfaces keep working
+        video_ids = [mv_id for (mv_id, _t, _c, _v) in members]
         items.append(
             {
                 "topic_id": f"youtube:topic:{topic.id}",
@@ -90,7 +128,8 @@ def _topic_pool_items(db) -> list[dict]:
                 "mentionCount": topic.observed_views or 0,
                 "engagementScore": round((topic.trend_score or 0) / 100, 4),
                 "rank": rank,
-                "relatedPosts": list(video_ids),
+                "relatedPosts": related_posts,
+                "relatedVideoIds": video_ids,
             }
         )
     return items
@@ -140,7 +179,8 @@ def _video_items(db, *, shorts_only: bool, namespace: str, limit: int) -> list[d
                 "title": f"{title or '(tanpa judul)'} — {channel_title or '?'}",
                 "mentionCount": views or 0,
                 "rank": rank,
-                "relatedPosts": [video_id],
+                "relatedPosts": [_post(video_id, title, channel_title, views)],
+                "relatedVideoIds": [video_id],
             }
         )
     return items
