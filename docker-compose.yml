@@ -77,7 +77,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    command: celery -A app.tasks.celery_app worker --loglevel=info -Q default --concurrency=2
+    command: celery -A app.tasks.celery_app worker --loglevel=info -Q default --concurrency=1
 
   celery_intelligence_worker:
     build: ./backend
@@ -97,7 +97,7 @@ services:
     # without blocking the two discovery/verification processes above.
     # Concurrency > 1 lets enrichment run alongside the long-running
     # build_trending_topics / recover_rejected tasks instead of queueing behind them.
-    command: celery -A app.tasks.celery_app worker --loglevel=info -Q intelligence --concurrency=2
+    command: celery -A app.tasks.celery_app worker --loglevel=info -Q intelligence --concurrency=1
 
   celery_beat:
     build: ./backend
