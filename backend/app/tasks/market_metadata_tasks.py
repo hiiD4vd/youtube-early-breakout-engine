@@ -33,7 +33,11 @@ def detect_market_metadata_bursts() -> dict[str, int | str]:
         now = datetime.now(UTC); cutoff = now - timedelta(hours=settings.market_metadata_window_hours)
         videos = db.scalars(select(MarketVideo).where(MarketVideo.shorts_status == "VERIFIED_SHORTS", MarketVideo.published_at >= cutoff)).all()
         latest: dict[int, MarketVideoObservation] = {}
-        for observation in db.scalars(select(MarketVideoObservation).order_by(desc(MarketVideoObservation.observed_at))).all(): latest.setdefault(observation.market_video_id, observation)
+        for observation in db.scalars(
+            select(MarketVideoObservation)
+            .order_by(desc(MarketVideoObservation.observed_at))
+            .execution_options(yield_per=2000)
+        ): latest.setdefault(observation.market_video_id, observation)
         grouped: dict[tuple[str, str], list[MarketVideo]] = defaultdict(list)
         for video in videos:
           for key, kind in _terms(video): grouped[(key, kind)].append(video)
