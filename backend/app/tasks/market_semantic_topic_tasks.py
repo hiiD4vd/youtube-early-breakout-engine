@@ -102,8 +102,10 @@ def recover_rejected_semantic_themes() -> dict[str, int | str]:
 
             latest: dict[int, MarketVideoObservation] = {}
             for observation in db.scalars(
-                select(MarketVideoObservation).order_by(desc(MarketVideoObservation.observed_at))
-            ).all():
+                select(MarketVideoObservation)
+                .order_by(desc(MarketVideoObservation.observed_at))
+                .execution_options(yield_per=2000)
+            ):
                 latest.setdefault(observation.market_video_id, observation)
 
             created = updated = memberships_added = 0
