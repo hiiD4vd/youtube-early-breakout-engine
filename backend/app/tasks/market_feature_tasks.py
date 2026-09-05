@@ -39,7 +39,7 @@ def build_market_video_features_for_db(db):
     # Ordinary videos are bounded to 30 days so old chart history does not
     # monopolise semantic enrichment capacity.
     ordinary_cutoff = datetime.now(UTC) - timedelta(days=30)
-    videos=db.scalars(
+    videos_stream = db.scalars(
         select(MarketVideo).where(
             or_(
                 MarketVideo.shorts_status == "VERIFIED_SHORTS",
@@ -49,10 +49,12 @@ def build_market_video_features_for_db(db):
                     MarketVideo.published_at >= ordinary_cutoff,
                 )
             )
-        )
-    ).all()
+        ).execution_options(yield_per=2000)
+    )
     existing={item.market_video_id:item for item in db.scalars(select(MarketVideoFeature)).all()}
-    for video in videos:
+    videos_count = 0
+    for video in videos_stream:
+        videos_count += 1
         text, vector, hint, digest=_payload(video); feature=existing.get(video.id)
         media_type = "shorts" if video.shorts_status == "VERIFIED_SHORTS" else "video"
         provenance={"content_hash":digest,"source":f"topic_pool_{media_type}","media_type":media_type,"fingerprint_version":FINGERPRINT_VERSION,"generated_at":datetime.now(UTC).isoformat()}
@@ -71,7 +73,7 @@ def build_market_video_features_for_db(db):
             feature.feature_model, feature.topic_hint, feature.confidence = "market-lexical-v2", hint, .25
             updated+=1
     db.commit()
-    return {"created":created,"updated":updated,"eligible":len(videos)}
+    return {"created":created,"updated":updated,"eligible":videos_count}
 
 
 @celery_app.task(name="app.tasks.market_feature_tasks.build_market_video_features")
