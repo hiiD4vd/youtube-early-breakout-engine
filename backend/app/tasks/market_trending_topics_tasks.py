@@ -607,10 +607,24 @@ def build_trending_topics() -> dict[str, int | str]:
         with SessionLocal() as db:
             # Native anonymous reel feed is the primary Shorts-only market
             # source. Charts and Apify only broaden coverage around it.
-            observations = db.scalars(select(MarketVideoObservation).where(MarketVideoObservation.source_lane.in_(("anonymous_shorts_feed", "official_chart", "official_latest_sample", "apify")), MarketVideoObservation.observed_at >= cutoff).order_by(desc(MarketVideoObservation.observed_at))).all()
             by_video: dict[int, list[MarketVideoObservation]] = defaultdict(list)
-            for item in observations:
-                by_video[item.market_video_id].append(item)
+            # _momentum() below only ever reads the 3 most recent observations
+            # per video, and `latest` only needs the newest. The query is ordered
+            # newest-first, so keeping the first 3 appended per video is exactly
+            # the data used downstream -> identical results, but we avoid holding
+            # hundreds of thousands of unused ORM rows in memory.
+            for item in db.scalars(
+                select(MarketVideoObservation)
+                .where(
+                    MarketVideoObservation.source_lane.in_(("anonymous_shorts_feed", "official_chart", "official_latest_sample", "apify")),
+                    MarketVideoObservation.observed_at >= cutoff,
+                )
+                .order_by(desc(MarketVideoObservation.observed_at))
+                .execution_options(yield_per=5000)
+            ):
+                bucket = by_video[item.market_video_id]
+                if len(bucket) < 3:
+                    bucket.append(item)
             if not by_video:
                 return {"status": "no_market_evidence", "topics": 0}
             videos = db.scalars(select(MarketVideo).where(MarketVideo.id.in_(by_video), MarketVideo.shorts_status == "VERIFIED_SHORTS")).all()
