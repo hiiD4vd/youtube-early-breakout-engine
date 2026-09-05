@@ -67,7 +67,14 @@ def score_market_topics() -> dict[str, int | str]:
             topics = db.scalars(select(MarketTopic)).all()
             latest_observation: dict[int, MarketVideoObservation] = {}
             prev_observation: dict[int, MarketVideoObservation] = {}
-            for observation in db.scalars(select(MarketVideoObservation).order_by(desc(MarketVideoObservation.observed_at))).all():
+            # Stream observations instead of materializing every row into memory.
+            # Same traversal order (observed_at DESC) and identical latest/prev
+            # map construction — only the read path changes, not the result.
+            for observation in db.scalars(
+                select(MarketVideoObservation)
+                .order_by(desc(MarketVideoObservation.observed_at))
+                .execution_options(yield_per=2000)
+            ):
                 if observation.market_video_id not in latest_observation:
                     latest_observation[observation.market_video_id] = observation
                 elif observation.market_video_id not in prev_observation:
