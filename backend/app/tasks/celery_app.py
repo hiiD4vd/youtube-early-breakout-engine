@@ -21,6 +21,14 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    # OOM safety net: recycle a child task after it exceeds a memory ceiling
+    # (~3.3 GB) OR after it processes a fixed number of tasks. Concurrency is 1,
+    # so a single heavy task (e.g. cluster_market_topics loading ~970k rows,
+    # send_youtube_signals_rich hitting video/short trends endpoints) can use
+    # plenty of RAM without risk, but any runaway accumulation still gets
+    # recycled before it takes down the whole worker with a SIGKILL.
+    worker_max_memory_per_child=3_500_000,  # KB (~3.3 GiB)
+    worker_max_tasks_per_child=25,          # release leaked memory regularly
     task_routes={
         # Discovery and verification must keep moving even when the semantic
         # provider is slow. These tasks run in a separate one-at-a-time AI
