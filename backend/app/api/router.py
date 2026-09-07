@@ -689,24 +689,21 @@ def list_general_video_trends(
     ]
     if source_lane_filter:
         conditions.insert(0, MarketVideoObservation.source_lane == source_lane_filter)
-    rows = db.execute(
-        select(MarketVideo, MarketVideoObservation)
-        .join(MarketVideoObservation, MarketVideoObservation.market_video_id == MarketVideo.id)
-        .where(*conditions)
-        .order_by(desc(MarketVideoObservation.observed_at))
-    ).all()
+    # Stream observations grouped per video (ordered by video id) so we never
+    # materialize every historical row at once. Each video's observations are
+    # accumulated, rendered, then released before moving on. This keeps the
+    # exact by_scan / same_region / velocity logic unchanged while bounding
+    # memory to a single video's observations.
+    items: list[dict] = []
+    current_vid: int | None = None
+    current_item: dict | None = None
 
-    grouped: dict[int, dict] = {}
-    for video, observation in rows:
-        if selected_region and observation.region != selected_region:
-            continue
-        item = grouped.setdefault(video.id, {"video": video, "observations": [], "regions": set()})
-        item["observations"].append(observation)
-        if observation.region:
-            item["regions"].add(observation.region)
-
-    items = []
-    for item in grouped.values():
+    def _render_trend_item(
+        item: dict, now: datetime, selected_category, selected_region,
+        min_duration_seconds, max_duration_seconds, min_age_hours,
+        max_age_hours, min_views, min_engagement, trend_source, shorts_only,
+    ) -> dict | None:
+        """Render one video's observations into a trend row (unchanged logic)."""
         observations = item["observations"]
         # One video can occur in multiple legacy-category requests at the same
         # scan. Prefer the dedicated all-category chart, then keep its best
@@ -721,7 +718,7 @@ def list_general_video_trends(
                 by_scan[key] = observation
         scans = sorted(by_scan.values(), key=lambda value: value.observed_at, reverse=True)
         if not scans:
-            continue
+            return None
         latest = scans[0]
         # Rank and growth comparisons must stay inside same regional chart.
         same_region_scans = [scan for scan in scans if scan.region == latest.region]
@@ -736,17 +733,17 @@ def list_general_video_trends(
         age_hours = ((now - video.published_at).total_seconds() / 3600) if video.published_at else None
         engagement = (latest.like_count or 0) + (latest.comment_count or 0)
         if selected_category and video.category_id != selected_category:
-            continue
+            return None
         if min_duration_seconds is not None and duration_seconds < min_duration_seconds:
-            continue
+            return None
         if max_duration_seconds is not None and duration_seconds > max_duration_seconds:
-            continue
+            return None
         if min_age_hours is not None and (age_hours is None or age_hours < min_age_hours):
-            continue
+            return None
         if max_age_hours is not None and (age_hours is None or age_hours > max_age_hours):
-            continue
+            return None
         if latest.view_count < min_views or engagement < min_engagement:
-            continue
+            return None
         # Calculate growth from oldest observation in same regional chart.
         oldest = same_region_scans[-1] if same_region_scans else latest
         views_gained = latest.view_count - (oldest.view_count or 0)
@@ -755,7 +752,7 @@ def list_general_video_trends(
         # hour so one observation reports its delta without inventing speed.
         elapsed_days = max(observation_span_hours / 24, 1 / 24)
         velocity_per_day = views_gained / elapsed_days
-        items.append({
+        return {
             "video_id": video.video_id,
             "title": video.title,
             "channel_title": video.channel_title,
@@ -782,7 +779,44 @@ def list_general_video_trends(
             "last_observed_at": latest.observed_at.isoformat(),
             "source": trend_source,
             "format": "shorts" if shorts_only else "non_shorts",
-        })
+        }
+
+    obs_stream = (
+        select(MarketVideo, MarketVideoObservation)
+        .join(MarketVideoObservation, MarketVideoObservation.market_video_id == MarketVideo.id)
+        .where(*conditions)
+        .order_by(MarketVideo.id, desc(MarketVideoObservation.observed_at))
+    )
+
+    for video, observation in db.execute(obs_stream).yield_per(2000):
+        if current_vid != video.id:
+            if current_item is not None:
+                rendered = _render_trend_item(
+                    current_item, now, selected_category, selected_region,
+                    min_duration_seconds, max_duration_seconds,
+                    min_age_hours, max_age_hours, min_views, min_engagement,
+                    trend_source, shorts_only,
+                )
+                if rendered is not None:
+                    items.append(rendered)
+            current_vid = video.id
+            current_item = {"video": video, "observations": [], "regions": set()}
+        if selected_region and observation.region != selected_region:
+            continue
+        current_item["observations"].append(observation)
+        if observation.region:
+            current_item["regions"].add(observation.region)
+
+    if current_item is not None:
+        rendered = _render_trend_item(
+            current_item, now, selected_category, selected_region,
+            min_duration_seconds, max_duration_seconds,
+            min_age_hours, max_age_hours, min_views, min_engagement,
+            trend_source, shorts_only,
+        )
+        if rendered is not None:
+            items.append(rendered)
+
     sort_keys = {
         "rank": lambda item: (item["rank"] is None, item["rank"] or 9999),
         "rank_gain": lambda item: (-(item["rank_change"] or 0), item["rank"] is None, item["rank"] or 9999),

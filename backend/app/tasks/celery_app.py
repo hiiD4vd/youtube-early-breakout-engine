@@ -105,7 +105,9 @@ celery_app.conf.update(
         # before an event may remain on the public leaderboard.
         ,"audit-market-content-truth": {"task":"app.tasks.market_content_truth_tasks.audit_market_content_truth","schedule":settings.market_content_truth_interval_minutes * 60}
         ,"match-external-trend-benchmarks": {"task":"app.tasks.external_benchmark_tasks.match_external_benchmarks","schedule":settings.external_benchmark_interval_minutes * 60}
-        ,"viral-ingest-youtube": {"task":"app.tasks.viral_ingest_tasks.send_youtube_to_viral_engine","schedule":900}
+        # Forward rich YouTube signals to ViralEngine's isolated endpoint.
+        # Uses the local API's compute so numbers match the Y-CGC dashboard.
+        ,"viral-ingest-youtube": {"task": "app.tasks.viral_ingest_tasks.send_youtube_signals_rich", "schedule": 900}
     } | (
         {
             "collect-market-apify-shorts": {

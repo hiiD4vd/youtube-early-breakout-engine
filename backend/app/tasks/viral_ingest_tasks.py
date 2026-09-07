@@ -32,7 +32,13 @@ BASE_URL = os.environ.get("VIRAL_ENGINE_BASE_URL", "").rstrip("/")
 API_KEY = os.environ.get("VIRAL_ENGINE_API_KEY", "")
 
 INGEST_URL = f"{BASE_URL}/api/v1/trending/ingest" if BASE_URL else ""
+# Internal Y-CGC API (this container calls its own API to reuse the exact same
+# ranking/compute logic that renders the local dashboard, so numbers match).
+YCGC_INTERNAL = os.environ.get("YCGC_INTERNAL_URL", "http://backend:8000").rstrip("/")
+# Dedicated YouTube ingest endpoint (isolated from TikTok/X studio ingest).
+INGEST_YOUTUBE_URL = f"{BASE_URL}/api/v1/trending/ingest-youtube" if BASE_URL else ""
 LOCK = "ycgc:lock:viral-ingest"
+LOCK_YOUTUBE = "ycgc:lock:viral-ingest-youtube"
 TIMEOUT = httpx.Timeout(20.0)
 
 # Berapa item per jenis yang dikirim tiap run
@@ -220,3 +226,137 @@ def send_youtube_to_viral_engine() -> dict[str, int | str]:
         return results
     finally:
         store.client.delete(LOCK)
+
+
+def _map_topic_to_v2(item: dict) -> dict:
+    """Map topic-pool /topic item to the V2 rich payload youtube_ingest reads."""
+    members = item.get("members") or []
+    member_ids = []
+    for m in members:
+        vid = m.get("video_id") or m.get("id")
+        if vid:
+            member_ids.append(str(vid))
+    return {
+        "topic_id": f"youtube:topic:{item.get('id') or item.get('topic_id') or item.get('label')}",
+        "surface": "topic",
+        "region": (item.get("region") or "ALL").upper(),
+        "category": VIRAL_CATEGORY,
+        "title": item.get("label") or item.get("title"),
+        "rank": item.get("rank"),
+        "mention_count": int(item.get("observed_views") or item.get("mention_count") or 0),
+        "observed_views": int(item.get("observed_views") or 0),
+        "period_growth_views": int(item.get("period_growth_views") or 0),
+        "observed_velocity_per_hour": float(item.get("observed_velocity_per_hour") or 0),
+        "organic_velocity_per_hour": float(item.get("organic_velocity_per_hour") or int(item.get("velocity_per_hour") or 0)),
+        "ranking_score": item.get("ranking_score") or item.get("trend_score"),
+        "ranking_reason": item.get("ranking_reason"),
+        "member_count": int(item.get("member_count") or len(members) or 0),
+        "channel_count": int(item.get("channel_count") or 0),
+        "media_mix": item.get("media_mix") or {},
+        "members": members,
+        "related_video_ids": member_ids,
+    }
+
+
+def _map_video_to_v2(item: dict, surface: str) -> dict:
+    """Map a video/short trend item to the V2 rich payload youtube_ingest reads."""
+    video_id = item.get("video_id") or item.get("id")
+    title = item.get("title") or ""
+    channel = item.get("channel_title") or ""
+    regions = item.get("tracked_regions") or item.get("region") or ["ALL"]
+    if isinstance(regions, str):
+        regions = [regions]
+    return {
+        "topic_id": f"youtube:{surface}:{video_id}",
+        "surface": surface,
+        "region": (regions[0] if regions else "ALL").upper(),
+        "category": VIRAL_CATEGORY,
+        "title": f"{title} — {channel}" if channel else title,
+        "rank": item.get("rank"),
+        "mention_count": int(item.get("view_count") or 0),
+        "observed_views": int(item.get("view_count") or 0),
+        "period_growth_views": int(item.get("views_gained") or 0),
+        "observed_velocity_per_hour": float(item.get("velocity_per_hour") or 0),
+        "organic_velocity_per_hour": float(item.get("velocity_per_hour") or 0),
+        "ranking_score": item.get("rank_change"),
+        "ranking_reason": None,
+        "member_count": int(item.get("observation_count") or 0),
+        "channel_count": 1,
+        "media_mix": {},
+        "members": [
+            {
+                "video_id": video_id,
+                "title": title,
+                "channel_title": channel,
+                "thumbnail_url": item.get("thumbnail_url"),
+                "cover_url": item.get("thumbnail_url") or (f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None),
+                "current_view_count": item.get("view_count"),
+                "view_count": item.get("view_count"),
+                "velocity_per_hour": item.get("velocity_per_hour"),
+            }
+        ],
+        "related_video_ids": [video_id] if video_id else [],
+    }
+
+
+def _send_youtube(items: list[dict]) -> dict:
+    if not items:
+        return {"skipped": 0, "status": "empty"}
+    payload = {"items": items}
+    with httpx.Client(timeout=TIMEOUT) as client:
+        resp = client.post(INGEST_YOUTUBE_URL, json=payload, headers=_headers())
+        resp.raise_for_status()
+        return resp.json()
+
+
+@celery_app.task(name="app.tasks.viral_ingest_tasks.send_youtube_signals_rich")
+def send_youtube_signals_rich() -> dict:
+    """Forward rich YouTube signals (reusing the local API's exact compute logic)
+    to ViralEngine's isolated /trending/ingest-youtube endpoint.
+
+    Instead of re-deriving ranking/velocity here (risky to get subtly wrong),
+    we call Y-CGC's own endpoints — the same code that renders the local
+    dashboard — and forward the payload. This guarantees numbers match.
+    """
+    if not BASE_URL or not API_KEY or not YCGC_INTERNAL:
+        return {"status": "youtube_engine_not_configured"}
+
+    store = SeedStore()
+    if not store.client.set(LOCK_YOUTUBE, "1", nx=True, ex=840):
+        return {"status": "skipped_locked"}
+
+    results: dict[str, int | str] = {"status": "ok"}
+    try:
+        # Collect via each surface endpoint (all use the local API's compute).
+        endpoints = [
+            ("topic", f"{YCGC_INTERNAL}/api/v1/youtube/topic-pool?limit={TOPIC_LIMIT}"),
+            ("video", f"{YCGC_INTERNAL}/api/v1/youtube/video-trends?limit={VIDEO_LIMIT}&sort=rank&period_days=7"),
+            ("short", f"{YCGC_INTERNAL}/api/v1/youtube/shorts-trends?limit={SHORT_LIMIT}&sort=rank&period_days=7"),
+        ]
+        items_v2: list[dict] = []
+        with httpx.Client(timeout=httpx.Timeout(60.0)) as client:
+            for surface, url in endpoints:
+                r = client.get(url, headers={"Content-Type": "application/json"})
+                r.raise_for_status()
+                data = r.json()
+                raw_items = data.get("items", [])
+                mapped = []
+                for it in raw_items:
+                    if surface == "topic":
+                        mapped.append(_map_topic_to_v2(it))
+                    else:
+                        mapped.append(_map_video_to_v2(it, surface))
+                items_v2.extend(mapped)
+                results[f"{surface}_prepared"] = len(mapped)
+
+        if items_v2:
+            resp = _send_youtube(items_v2)
+            results["sent"] = len(items_v2)
+            results["ingest_response"] = str(resp)[:200]
+        else:
+            results["sent"] = 0
+
+        store.set_status(viral_ingest_youtube_last_run_at=datetime.now(UTC).isoformat(), viral_ingest_youtube_sent=len(items_v2))
+        return results
+    finally:
+        store.client.delete(LOCK_YOUTUBE)
